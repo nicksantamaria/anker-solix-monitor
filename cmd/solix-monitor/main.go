@@ -24,6 +24,10 @@ func main() {
 	logger := setupLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
+	if cfg.BLEAddress == "" {
+		logger.Error("BLE device address is required: use -addr flag or SOLIX_ADDRESS environment variable")
+		os.Exit(1)
+	}
 	logger.Info("starting solix-monitor",
 		"addr", cfg.BLEAddress,
 		"db", cfg.DBPath,

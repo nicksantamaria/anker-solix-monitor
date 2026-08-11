@@ -21,7 +21,6 @@ type Config struct {
 
 // Default values used when neither an environment variable nor a flag is set.
 const (
-	defaultBLEAddress     = "E8:EE:CC:7C:0A:2A"
 	defaultDBPath         = "./solix.db"
 	defaultListenAddr     = "0.0.0.0:8080"
 	defaultPollInterval   = 30 * time.Second
@@ -36,7 +35,7 @@ const (
 func Load() Config {
 	fs := flag.NewFlagSet("solix-monitor", flag.ContinueOnError)
 
-	addr := fs.String("addr", defaultBLEAddress, "BLE MAC address of the device")
+	addr := fs.String("addr", "", "BLE address of the device (MAC address or UUID; required)")
 	db := fs.String("db", defaultDBPath, "SQLite database file path")
 	listen := fs.String("listen", defaultListenAddr, "HTTP server bind address")
 	poll := fs.Duration("poll-interval", defaultPollInterval, "telemetry polling interval")
