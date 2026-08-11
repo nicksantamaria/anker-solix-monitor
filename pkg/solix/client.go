@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/linux"
-
+	solixble "github.com/nicksantamaria/anker-solix-monitor/pkg/solix/ble"
 	"github.com/nicksantamaria/anker-solix-monitor/pkg/solix/models"
 	"github.com/nicksantamaria/anker-solix-monitor/pkg/solix/protocol"
 )
@@ -53,13 +52,12 @@ type Client struct {
 	mu  sync.Mutex
 }
 
-// NewClient initialises the Linux HCI BLE stack and returns a ready-to-use
-// Client. This call opens the HCI socket so it must be called with sufficient
-// permissions (typically root or CAP_NET_RAW).
+// NewClient initialises the BLE stack and returns a ready-to-use
+// Client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg.setDefaults()
 
-	d, err := linux.NewDevice()
+	d, err := solixble.NewDevice()
 	if err != nil {
 		return nil, fmt.Errorf("solix: failed to initialise BLE device: %w", err)
 	}
@@ -79,8 +77,13 @@ func (c *Client) Scan(ctx context.Context) ([]DiscoveredDevice, error) {
 	var found []DiscoveredDevice
 
 	filter := func(a ble.Advertisement) bool {
+		c.cfg.Logger.Debug("scanning device", "name", a.LocalName(), "addr", a.Addr().String(), "rssi", a.RSSI())
+		if a.LocalName() == "767_PowerHouse" {
+			return true
+		}
 		for _, svcUUID := range a.Services() {
-			if svcUUID.Equal(ble.MustParse(protocol.UUIDIdentifier)) {
+			c.cfg.Logger.Debug("advertised service", "name", a.LocalName(), "uuid", svcUUID.String())
+			if svcUUID.Equal(ble.MustParse(protocol.UUIDIdentifier)) || svcUUID.Equal(ble.MustParse("ff09")) {
 				return true
 			}
 		}
@@ -129,23 +132,60 @@ func (c *Client) Connect(ctx context.Context, addr string) (*Device, error) {
 
 	c.cfg.Logger.Info("connecting to solix device", "addr", addr)
 
-	filter := func(a ble.Advertisement) bool {
-		return a.Addr().String() == addr
+	// Use a channel to capture the result of ble.Dial
+	type result struct {
+		conn ble.Client
+		err  error
 	}
+	ch := make(chan result, 1)
 
-	conn, err := ble.Connect(connCtx, filter)
-	if err != nil {
-		return nil, fmt.Errorf("solix: connect to %s: %w", addr, err)
+	c.cfg.Logger.Debug("calling ble.Dial", "addr", addr)
+	go func() {
+		conn, err := ble.Dial(connCtx, ble.NewAddr(addr))
+		ch <- result{conn, err}
+	}()
+
+	var conn ble.Client
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			c.cfg.Logger.Debug("ble.Dial failed", "addr", addr, "err", res.err)
+			return nil, fmt.Errorf("solix: connect to %s: %w", addr, res.err)
+		}
+		conn = res.conn
+	case <-connCtx.Done():
+		c.cfg.Logger.Debug("ble.Dial timed out or was canceled", "addr", addr, "err", connCtx.Err())
+		return nil, fmt.Errorf("solix: connect to %s: %w", addr, connCtx.Err())
 	}
 
 	c.cfg.Logger.Info("BLE connection established", "addr", addr)
 
-	// Discover GATT profile to determine protocol path
-	profile, err := conn.DiscoverProfile(true)
-	if err != nil {
-		_ = conn.CancelConnection()
-		return nil, fmt.Errorf("solix: discover profile on %s: %w", addr, err)
+	c.cfg.Logger.Debug("discovering GATT profile", "addr", addr)
+	type profileResult struct {
+		profile *ble.Profile
+		err     error
 	}
+	pch := make(chan profileResult, 1)
+	go func() {
+		p, err := conn.DiscoverProfile(true)
+		pch <- profileResult{p, err}
+	}()
+
+	var profile *ble.Profile
+	select {
+	case res := <-pch:
+		if res.err != nil {
+			c.cfg.Logger.Debug("DiscoverProfile failed", "addr", addr, "err", res.err)
+			_ = conn.CancelConnection()
+			return nil, fmt.Errorf("solix: discover profile on %s: %w", addr, res.err)
+		}
+		profile = res.profile
+	case <-connCtx.Done():
+		c.cfg.Logger.Debug("DiscoverProfile timed out", "addr", addr)
+		_ = conn.CancelConnection()
+		return nil, fmt.Errorf("solix: discover profile on %s: %w", addr, connCtx.Err())
+	}
+	c.cfg.Logger.Debug("GATT profile discovered", "addr", addr)
 
 	// Determine device name from connection metadata
 	name := addr // fallback
@@ -190,7 +230,9 @@ func (c *Client) connectEncrypted(ctx context.Context, conn ble.Client, profile 
 	// Run negotiation
 	negCtx, negCancel := context.WithTimeout(ctx, c.cfg.NegotiationTimeout)
 	defer negCancel()
+	c.cfg.Logger.Debug("starting encrypted protocol negotiation", "addr", addr)
 	if err := enc.negotiate(negCtx); err != nil {
+		c.cfg.Logger.Debug("negotiation failed", "addr", addr, "err", err)
 		devCancel()
 		_ = conn.CancelConnection()
 		return nil, fmt.Errorf("solix: negotiation with %s: %w", addr, err)
@@ -243,11 +285,16 @@ func (c *Client) connectF2000(ctx context.Context, conn ble.Client, profile *ble
 		return nil, fmt.Errorf("solix: subscribe F2000 on %s: %w", addr, err)
 	}
 
-	// Send initial telemetry query
-	if err := conn.WriteCharacteristic(writeChar, f2000TelemetryQuery, false); err != nil {
-		devCancel()
-		_ = conn.CancelConnection()
-		return nil, fmt.Errorf("solix: F2000 initial query on %s: %w", addr, err)
+	c.cfg.Logger.Debug("starting F2000 initial telemetry query", "addr", addr)
+	if err := conn.WriteCharacteristic(writeChar, f2000TelemetryQuery, true); err != nil {
+		c.cfg.Logger.Debug("F2000 initial query failed (noRsp=true)", "addr", addr, "err", err)
+		// Fallback to write with response if without response is not supported
+		if err := conn.WriteCharacteristic(writeChar, f2000TelemetryQuery, false); err != nil {
+			c.cfg.Logger.Debug("F2000 initial query failed (noRsp=false)", "addr", addr, "err", err)
+			devCancel()
+			_ = conn.CancelConnection()
+			return nil, fmt.Errorf("solix: F2000 initial query on %s: %w", addr, err)
+		}
 	}
 
 	// Background watchdog
@@ -272,9 +319,16 @@ func hasChar(profile *ble.Profile, uuid string) bool {
 // findChar returns the characteristic from profile with the given UUID, or nil.
 func findChar(profile *ble.Profile, uuid string) *ble.Characteristic {
 	target := ble.MustParse(uuid)
+	var shortTarget ble.UUID
+	if len(uuid) == 36 && (uuid[8:] == "-0000-1000-8000-00805f9b34fb") {
+		shortTarget = ble.MustParse(uuid[4:8])
+	}
+
 	for _, svc := range profile.Services {
 		for _, ch := range svc.Characteristics {
-			if ch.UUID.Equal(target) {
+			if ch.UUID.Equal(target) || (shortTarget != nil && ch.UUID.Equal(shortTarget)) {
+				// Log characteristic properties for debugging if writing fails
+				slog.Debug("found characteristic", "uuid", ch.UUID.String(), "props", fmt.Sprintf("%02x", ch.Property))
 				return ch
 			}
 		}
@@ -298,7 +352,7 @@ func f2000StatusToDeviceStatus(s models.F2000Status) DeviceStatus {
 		BatteryPercentExpansion:   s.BatteryPercentExpansion,
 		BatteryHealth:             s.BatteryHealth,
 		BatteryHealthExpansion:    s.BatteryHealthExpansion,
-		NumExpansion:               s.NumExpansion,
+		NumExpansion:              s.NumExpansion,
 		TimeRemainingHours:        s.TimeRemainingHours,
 		DaysRemaining:             s.DaysRemaining,
 		HoursRemaining:            s.HoursRemaining,
@@ -336,17 +390,17 @@ var f2000TelemetryQuery = []byte{0x08, 0xEE, 0x00, 0x00, 0x00, 0x01, 0x01, 0x0A,
 
 // encryptedSession manages the encrypted BLE session state for a single device.
 type encryptedSession struct {
-	conn        ble.Client
-	cmdChar     *ble.Characteristic
-	telChar     *ble.Characteristic
-	log         *slog.Logger
+	conn         ble.Client
+	cmdChar      *ble.Characteristic
+	telChar      *ble.Characteristic
+	log          *slog.Logger
 	sharedSecret []byte
-	negoState   int
-	negoDone    chan struct{}
-	fragBufs    map[string]map[int][]byte
-	fragTotals  map[string]int
-	onTelemetry func(params map[string][]byte)
-	negoTS      time.Time
+	negoState    int
+	negoDone     chan struct{}
+	fragBufs     map[string]map[int][]byte
+	fragTotals   map[string]int
+	onTelemetry  func(params map[string][]byte)
+	negoTS       time.Time
 }
 
 func newEncryptedSession(conn ble.Client, cmdChar, telChar *ble.Characteristic, log *slog.Logger) *encryptedSession {
@@ -368,7 +422,11 @@ func (e *encryptedSession) negotiate(ctx context.Context) error {
 		return err
 	}
 	if err := e.conn.WriteCharacteristic(e.cmdChar, cmd0, true); err != nil {
-		return fmt.Errorf("send negotiation init: %w", err)
+		e.log.Debug("send negotiation init failed (noRsp=true)", "err", err)
+		if err := e.conn.WriteCharacteristic(e.cmdChar, cmd0, false); err != nil {
+			e.log.Debug("send negotiation init failed (noRsp=false)", "err", err)
+			return fmt.Errorf("send negotiation init: %w", err)
+		}
 	}
 
 	select {
@@ -450,9 +508,12 @@ func (e *encryptedSession) handleNegotiation(cmdHex string, payload []byte) {
 		e.log.Error("negotiation bytes error", "stage", stageReply, "err", err)
 		return
 	}
-	if err := e.conn.WriteCharacteristic(e.cmdChar, b, false); err != nil {
-		e.log.Error("write negotiation response failed", "stage", stageReply, "err", err)
-		return
+	if err := e.conn.WriteCharacteristic(e.cmdChar, b, true); err != nil {
+		e.log.Debug("write negotiation response failed (noRsp=true)", "stage", stageReply, "err", err)
+		if err := e.conn.WriteCharacteristic(e.cmdChar, b, false); err != nil {
+			e.log.Error("write negotiation response failed (noRsp=false)", "stage", stageReply, "err", err)
+			return
+		}
 	}
 
 	// If we just sent stage 5 reply, negotiation is complete
@@ -564,20 +625,27 @@ func (f *f2000Session) onNotification(data []byte) {
 		return
 	}
 
-	// Validate checksum: sum of all bytes (including checksum) should be 0 mod 256
-	var sum byte
+	// Validate checksum: XOR of all bytes should be 0, OR sum of preceding bytes should equal last byte
+	var xorSum byte
 	for _, b := range data {
-		sum += b
+		xorSum ^= b
 	}
-	if sum != 0 {
-		f.log.Warn("F2000 checksum mismatch")
-		return
+
+	if xorSum != 0 {
+		var addSum byte
+		for i := 0; i < len(data)-1; i++ {
+			addSum += data[i]
+		}
+		if addSum != data[len(data)-1] {
+			f.log.Warn("F2000 checksum mismatch", "xor", fmt.Sprintf("%02x", xorSum), "add", fmt.Sprintf("%02x", addSum), "expected", fmt.Sprintf("%02x", data[len(data)-1]), "raw", fmt.Sprintf("%x", data))
+			return
+		}
 	}
 
 	subType := data[6]
 	switch subType {
-	case 0x49:
-		// Main telemetry packet (102 bytes expected)
+	case 0x49, 0x01:
+		// Telemetry packet (0x49 is 102 bytes, 0x01 is 122 bytes)
 		if len(data) < 102 {
 			f.log.Warn("F2000 telemetry packet too short", "len", len(data))
 			return
@@ -588,14 +656,13 @@ func (f *f2000Session) onNotification(data []byte) {
 		}
 	case 0x48:
 		f.log.Debug("F2000 state ACK packet received")
-	case 0x01:
-		f.log.Debug("F2000 auxiliary state packet received")
 	default:
 		f.log.Debug("F2000 unknown sub_type", "sub_type", fmt.Sprintf("%02x", subType))
 	}
 }
 
-// parseF2000Telemetry decodes a 102-byte unencrypted F2000 telemetry packet.
+// parseF2000Telemetry decodes an unencrypted F2000 telemetry packet.
+// Supports both the 102-byte (0x49) and 122-byte (0x01) variants.
 func parseF2000Telemetry(data []byte) models.F2000Status {
 	le16 := func(i int) int {
 		if i+1 >= len(data) {
@@ -604,29 +671,29 @@ func parseF2000Telemetry(data []byte) models.F2000Status {
 		return int(binary.LittleEndian.Uint16(data[i : i+2]))
 	}
 
-	s := models.F2000Status{
-		TimeRemainingHours: float64(data[17]) / 10.0,
-		DaysRemaining:      int(data[18]),
+	s := models.F2000Status{}
 
-		ACPowerIn:    le16(19),
-		ACPowerOut:   le16(21),
-		USBC1Power:   le16(23),
-		USBC2Power:   le16(25),
-		USBC3Power:   le16(27),
-		USBA1Power:   le16(29),
-		USBA2Power:   le16(31),
-		DC1PowerOut:  le16(33),
-		DC2PowerOut:  le16(35),
-		SolarPowerIn: le16(37),
+	// Common fields for both 0x49 and 0x01 subtypes
+	s.TimeRemainingHours = float64(data[17]) / 10.0
+	s.DaysRemaining = int(data[18])
+	s.ACPowerIn = le16(19)
+	s.ACPowerOut = le16(21)
+	s.USBC1Power = le16(23)
+	s.USBC2Power = le16(25)
+	s.USBC3Power = le16(27)
+	s.USBA1Power = le16(29)
+	s.USBA2Power = le16(31)
+	s.DC1PowerOut = le16(33)
+	s.DC2PowerOut = le16(35)
+	s.SolarPowerIn = le16(37)
+	s.Temperature = int(data[66])
+	s.TemperatureExpansion = int(data[67])
+	s.BatteryPercent = int(data[70])
+	s.BatteryPercentExpansion = int(data[71])
+	s.BatteryHealth = int(data[72])
+	s.NumExpansion = int(data[80])
 
-		Temperature:          int(data[66]),
-		TemperatureExpansion: int(data[67]),
-
-		BatteryPercent:          int(data[70]),
-		BatteryPercentExpansion: int(data[71]),
-	}
-
-	// Serial number from bytes 85:101
+	// Serial number from bytes 85:101 for both variants
 	if len(data) >= 101 {
 		raw := data[85:101]
 		end := len(raw)
@@ -634,6 +701,15 @@ func parseF2000Telemetry(data []byte) models.F2000Status {
 			end--
 		}
 		s.SerialNumber = string(raw[:end])
+	}
+
+	if s.TimeRemainingHours > 0 {
+		days := int(s.TimeRemainingHours) / 24
+		hours := s.TimeRemainingHours - float64(days*24)
+		s.DaysRemaining = days
+		s.HoursRemaining = float64(int(hours*10+0.5)) / 10.0
+		ts := time.Now().Add(time.Duration(s.TimeRemainingHours * float64(time.Hour)))
+		s.TimestampRemaining = &ts
 	}
 
 	return s
