@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solix F2000 Monitor</title>
+<script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2029;
+    --panel-2: #222b36;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #3fb950;
+    --warn: #f0883e;
+    --danger: #f85149;
+    --blue: #58a6ff;
+    --border: #2d3743;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 1.3rem; margin: 0; }
+  .status-line { font-size: 0.85rem; color: var(--muted); }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(63,185,80,0.15); color: var(--accent); }
+  .badge.stale { background: rgba(248,81,73,0.15); color: var(--danger); }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 1.6rem; font-weight: 700; margin-top: 4px; }
+  .card .unit { font-size: 0.9rem; color: var(--muted); font-weight: 400; }
+  .battery-fill { height: 6px; border-radius: 3px; background: var(--panel-2); margin-top: 8px; overflow: hidden; }
+  .battery-fill > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+  .controls { margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .controls button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .controls button.active { background: var(--blue); color: #0f1419; border-color: var(--blue); font-weight: 600; }
+  .charts { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 900px) { .charts { grid-template-columns: 1fr 1fr; } }
+  .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .chart-panel h3 { margin: 0 0 10px; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
+  canvas { max-height: 240px; }
+  footer { margin-top: 20px; font-size: 0.75rem; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Solix F2000 Monitor</h1>
+    <div class="status-line" id="statusLine">Loading…</div>
+  </div>
+  <div id="connBadge" class="badge ok">—</div>
+</header>
+
+<section class="cards" id="cards">
+  <div class="card">
+    <div class="label">Battery</div>
+    <div class="value" id="battery">—<span class="unit">%</span></div>
+    <div class="battery-fill"><span id="batteryFill" style="width:0%"></span></div>
+  </div>
+  <div class="card"><div class="label">Solar In</div><div class="value" id="solar">—<span class="unit">W</span></div></div>
+  <div class="card"><div class="label">AC In</div><div class="value" id="acIn">—<span class="unit">W</span></div></div>
+  <div class="card"><div class="label">AC Out</div><div class="value" id="acOut">—<span class="unit">W</span></div></div>
+  <div class="card"><div class="label">DC Out</div><div class="value" id="dcOut">—<span class="unit">W</span></div></div>
+  <div class="card"><div class="label">Temperature</div><div class="value" id="temp">—<span class="unit">°C</span></div></div>
+</section>
+
+<div class="controls" id="rangeControls">
+  <button data-hours="1">1h</button>
+  <button data-hours="6">6h</button>
+  <button data-hours="24" class="active">24h</button>
+  <button data-hours="168">7d</button>
+</div>
+
+<section class="charts">
+  <div class="chart-panel"><h3>Battery %</h3><canvas id="chartBattery"></canvas></div>
+  <div class="chart-panel"><h3>Solar Power (W)</h3><canvas id="chartSolar"></canvas></div>
+  <div class="chart-panel"><h3>AC Output (W)</h3><canvas id="chartAcOut"></canvas></div>
+</section>
+
+<footer>Auto-refreshes every 30s · <span id="lastUpdate">—</span></footer>
+
+<script>
+(function () {
+  const STALE_MS = 3 * 60 * 1000;
+  let rangeHours = 24;
+  const charts = {};
+
+  function fmt(v, dash = "—") {
+    return (v === null || v === undefined) ? dash : v;
+  }
+
+  async function fetchJSON(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(url + " -> " + res.status);
+    return res.json();
+  }
+
+  function setBadge(connected, ts) {
+    const badge = document.getElementById("connBadge");
+    const age = ts ? (Date.now() - new Date(ts).getTime()) : Infinity;
+    const stale = !connected || age > STALE_MS;
+    if (stale) {
+      badge.className = "badge stale";
+      badge.textContent = connected ? "STALE" : "DISCONNECTED";
+    } else {
+      badge.className = "badge ok";
+      badge.textContent = "CONNECTED";
+    }
+  }
+
+  async function refreshStatus() {
+    try {
+      const [status, health] = await Promise.all([
+        fetchJSON("/api/status").catch(() => null),
+        fetchJSON("/api/health").catch(() => null),
+      ]);
+
+      if (status) {
+        document.getElementById("battery").innerHTML = fmt(status.battery_percent) + '<span class="unit">%</span>';
+        document.getElementById("batteryFill").style.width = (status.battery_percent || 0) + "%";
+        document.getElementById("solar").innerHTML = fmt(status.solar_power_w) + '<span class="unit">W</span>';
+        document.getElementById("acIn").innerHTML = fmt(status.ac_power_in_w) + '<span class="unit">W</span>';
+        document.getElementById("acOut").innerHTML = fmt(status.ac_power_out_w) + '<span class="unit">W</span>';
+        const dc = (status.dc1_power_out_w || 0) + (status.dc2_power_out_w || 0);
+        document.getElementById("dcOut").innerHTML = dc + '<span class="unit">W</span>';
+        document.getElementById("temp").innerHTML = fmt(status.temperature_c) + '<span class="unit">°C</span>';
+        document.getElementById("lastUpdate").textContent = "Last data: " + new Date(status.timestamp).toLocaleString();
+      }
+
+      const connected = health ? !!health.ble_connected : false;
+      const ts = status ? status.timestamp : null;
+      setBadge(connected, ts);
+
+      const parts = [];
+      if (health) {
+        parts.push("BLE " + (health.ble_connected ? "connected" : "disconnected"));
+        parts.push("DB " + (health.db_ok ? "ok" : "error"));
+        if (health.uptime_seconds != null) parts.push("uptime " + Math.floor(health.uptime_seconds / 60) + "m");
+        if (health.last_error) parts.push("err: " + health.last_error);
+      }
+      document.getElementById("statusLine").textContent = parts.join(" · ") || "No health data";
+    } catch (e) {
+      document.getElementById("statusLine").textContent = "Error: " + e.message;
+    }
+  }
+
+  function buildChart(id, color) {
+    const ctx = document.getElementById(id).getContext("2d");
+    return new Chart(ctx, {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: color, backgroundColor: color + "33", fill: true, pointRadius: 0, borderWidth: 2, tension: 0.25 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, grid: { color: "#2d3743" } },
+          y: { ticks: { color: "#8b98a5" }, grid: { color: "#2d3743" }, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  function labelFor(ts) {
+    const d = new Date(ts);
+    if (rangeHours > 24) {
+      return (d.getMonth() + 1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2, "0") + ":00";
+    }
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  async function refreshCharts() {
+    try {
+      const rows = await fetchJSON("/api/history?hours=" + rangeHours);
+      const labels = rows.map(r => labelFor(r.timestamp));
+      const setData = (chart, key) => {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = rows.map(r => r[key]);
+        chart.update();
+      };
+      setData(charts.battery, "battery_percent");
+      setData(charts.solar, "solar_power_w");
+      setData(charts.acOut, "ac_power_out_w");
+    } catch (e) {
+      console.error("charts", e);
+    }
+  }
+
+  function initControls() {
+    document.querySelectorAll("#rangeControls button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("#rangeControls button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        rangeHours = parseInt(btn.dataset.hours, 10);
+        refreshCharts();
+      });
+    });
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    if (typeof Chart !== "undefined") {
+      charts.battery = buildChart("chartBattery", "#3fb950");
+      charts.solar = buildChart("chartSolar", "#f0883e");
+      charts.acOut = buildChart("chartAcOut", "#58a6ff");
+    }
+    initControls();
+    refreshStatus();
+    refreshCharts();
+    setInterval(refreshStatus, 30000);
+    setInterval(refreshCharts, 60000);
+  });
+})();
+</script>
+</body>
+</html>
