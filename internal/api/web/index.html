@@ -78,6 +78,7 @@
   .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
   .chart-panel h3 { margin: 0 0 10px; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
   canvas { max-height: 240px; }
+  .chart-panel--gauge canvas { max-height: 200px; }
   footer { margin-top: 20px; font-size: 0.75rem; color: var(--muted); text-align: center; }
 </style>
 </head>
@@ -114,6 +115,11 @@
   <div class="chart-panel"><h3>Battery %</h3><canvas id="chartBattery"></canvas></div>
   <div class="chart-panel"><h3>Solar Power (W)</h3><canvas id="chartSolar"></canvas></div>
   <div class="chart-panel"><h3>AC Output (W)</h3><canvas id="chartAcOut"></canvas></div>
+  <div class="chart-panel"><h3>AC Input (W)</h3><canvas id="chartAcIn"></canvas></div>
+  <div class="chart-panel"><h3>DC Output (W)</h3><canvas id="chartDcOut"></canvas></div>
+  <div class="chart-panel"><h3>USB Power Out (W)</h3><canvas id="chartUsb"></canvas></div>
+  <div class="chart-panel"><h3>Temperature (°C)</h3><canvas id="chartTemp"></canvas></div>
+  <div class="chart-panel chart-panel--gauge"><h3>Battery Health (%)</h3><canvas id="chartBatteryHealth"></canvas></div>
 </section>
 
 <footer>Auto-refreshes every 30s · <span id="lastUpdate">—</span></footer>
@@ -164,6 +170,12 @@
         document.getElementById("dcOut").innerHTML = dc + '<span class="unit">W</span>';
         document.getElementById("temp").innerHTML = fmt(status.temperature_c) + '<span class="unit">°C</span>';
         document.getElementById("lastUpdate").textContent = "Last data: " + new Date(status.timestamp).toLocaleString();
+
+        if (charts.batteryHealth) {
+          const bh = status.battery_health || 0;
+          charts.batteryHealth.data.datasets[0].data = [bh, 100 - bh];
+          charts.batteryHealth.update();
+        }
       }
 
       const connected = health ? !!health.ble_connected : false;
@@ -200,6 +212,74 @@
     });
   }
 
+  function buildMultiChart(id, datasets) {
+    const ctx = document.getElementById(id).getContext("2d");
+    return new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: datasets.map(d => ({
+          label: d.label,
+          data: [],
+          borderColor: d.color,
+          backgroundColor: d.color + "33",
+          fill: false,
+          pointRadius: 0,
+          borderWidth: 2,
+          tension: 0.25,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true, labels: { color: "#8b98a5", boxWidth: 12, font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, grid: { color: "#2d3743" } },
+          y: { ticks: { color: "#8b98a5" }, grid: { color: "#2d3743" }, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  function buildGauge(id) {
+    const ctx = document.getElementById(id).getContext("2d");
+    return new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        datasets: [{
+          data: [0, 100],
+          backgroundColor: ["#3fb950", "#2d3743"],
+          borderWidth: 0,
+          circumference: 180,
+          rotation: 270,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "70%",
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false },
+        },
+      },
+      plugins: [{
+        id: "gaugeLabel",
+        afterDraw(chart) {
+          const { ctx: c, chartArea: { left, right, bottom } } = chart;
+          const val = chart.data.datasets[0].data[0];
+          c.save();
+          c.font = "bold 28px -apple-system, BlinkMacSystemFont, sans-serif";
+          c.fillStyle = "#e6edf3";
+          c.textAlign = "center";
+          c.textBaseline = "bottom";
+          c.fillText(val + "%", (left + right) / 2, bottom);
+          c.restore();
+        },
+      }],
+    });
+  }
+
   function labelFor(ts) {
     const d = new Date(ts);
     if (rangeHours > 24) {
@@ -220,6 +300,22 @@
       setData(charts.battery, "battery_percent");
       setData(charts.solar, "solar_power_w");
       setData(charts.acOut, "ac_power_out_w");
+      setData(charts.acIn, "ac_power_in_w");
+      setData(charts.temp, "temperature_c");
+
+      // DC Output: sum of dc1 + dc2
+      charts.dcOut.data.labels = labels;
+      charts.dcOut.data.datasets[0].data = rows.map(r => (r.dc1_power_out_w || 0) + (r.dc2_power_out_w || 0));
+      charts.dcOut.update();
+
+      // USB multi-line
+      charts.usb.data.labels = labels;
+      charts.usb.data.datasets[0].data = rows.map(r => r.usba1_power_w || 0);
+      charts.usb.data.datasets[1].data = rows.map(r => r.usba2_power_w || 0);
+      charts.usb.data.datasets[2].data = rows.map(r => r.usbc1_power_w || 0);
+      charts.usb.data.datasets[3].data = rows.map(r => r.usbc2_power_w || 0);
+      charts.usb.data.datasets[4].data = rows.map(r => r.usbc3_power_w || 0);
+      charts.usb.update();
     } catch (e) {
       console.error("charts", e);
     }
@@ -241,6 +337,17 @@
       charts.battery = buildChart("chartBattery", "#3fb950");
       charts.solar = buildChart("chartSolar", "#f0883e");
       charts.acOut = buildChart("chartAcOut", "#58a6ff");
+      charts.acIn = buildChart("chartAcIn", "#a371f7");
+      charts.dcOut = buildChart("chartDcOut", "#f0883e");
+      charts.temp = buildChart("chartTemp", "#f85149");
+      charts.usb = buildMultiChart("chartUsb", [
+        { label: "USB-A1", color: "#58a6ff" },
+        { label: "USB-A2", color: "#3fb950" },
+        { label: "USB-C1", color: "#f0883e" },
+        { label: "USB-C2", color: "#a371f7" },
+        { label: "USB-C3", color: "#ffa657" },
+      ]);
+      charts.batteryHealth = buildGauge("chartBatteryHealth");
     }
     initControls();
     refreshStatus();
