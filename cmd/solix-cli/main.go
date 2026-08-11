@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -111,9 +112,9 @@ func runStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	addr := fs.String("addr", "", "Device MAC address (required, or omit to auto-discover)")
 	scanTimeout := fs.Duration("scan-timeout", 10*time.Second, "How long to scan when auto-discovering")
-	connectTimeout := fs.Duration("connect-timeout", 30*time.Second, "BLE connection timeout")
-	negoTimeout := fs.Duration("nego-timeout", 90*time.Second, "ECDH negotiation timeout")
-	waitTimeout := fs.Duration("wait-timeout", 30*time.Second, "How long to wait for first telemetry")
+	connectTimeout := fs.Duration("connect-timeout", 5*time.Second, "BLE connection timeout")
+	negoTimeout := fs.Duration("nego-timeout", 5*time.Second, "ECDH negotiation timeout")
+	waitTimeout := fs.Duration("wait-timeout", 10*time.Second, "How long to wait for first telemetry")
 	outputJSON := fs.Bool("json", false, "Output result as JSON")
 	_ = fs.Parse(args)
 
@@ -121,6 +122,7 @@ func runStatus(args []string) {
 		ScanTimeout:        *scanTimeout,
 		ConnectTimeout:     *connectTimeout,
 		NegotiationTimeout: *negoTimeout,
+		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to initialise BLE: %v\n", err)
@@ -138,6 +140,7 @@ func runStatus(args []string) {
 	device := mustConnect(ctx, client, targetAddr)
 	defer device.Disconnect()
 
+	fmt.Println("Waiting for telemetry data...")
 	status := mustWaitForStatus(ctx, device, *waitTimeout)
 
 	if *outputJSON {
@@ -165,6 +168,7 @@ func runMonitor(args []string) {
 		ScanTimeout:        *scanTimeout,
 		ConnectTimeout:     *connectTimeout,
 		NegotiationTimeout: *negoTimeout,
+		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to initialise BLE: %v\n", err)
@@ -232,8 +236,18 @@ func mustConnect(ctx context.Context, client *solix.Client, addr string) *solix.
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", addr)
 	device, err := client.Connect(ctx, addr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: connect failed: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Connection failed (%v), attempting brief scan to wake up device...\n", err)
+		// Perform a short scan to populate macOS BLE cache
+		scanCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, _ = client.Scan(scanCtx)
+		cancel()
+
+		fmt.Fprintf(os.Stderr, "Retrying connection to %s...\n", addr)
+		device, err = client.Connect(ctx, addr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: connect failed: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Connected to %s (%s)\n", device.Name(), device.Addr())
 	return device

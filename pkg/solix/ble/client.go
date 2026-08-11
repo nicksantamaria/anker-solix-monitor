@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/linux"
 
 	"github.com/nicksantamaria/anker-solix-monitor/pkg/solix/protocol"
 )
@@ -27,13 +26,13 @@ type Connection struct {
 	addr   string
 }
 
-// NewClient initialises the Linux HCI BLE device.
+// NewClient initialises the BLE device.
 // It must be called once per process and the returned Client is safe for
 // concurrent use after initialisation.
 func NewClient() (*Client, error) {
-	d, err := linux.NewDevice()
+	d, err := NewDevice()
 	if err != nil {
-		return nil, fmt.Errorf("ble: failed to initialise Linux HCI device: %w", err)
+		return nil, fmt.Errorf("ble: failed to initialise BLE device: %w", err)
 	}
 	ble.SetDefaultDevice(d)
 	return &Client{device: d}, nil
@@ -44,8 +43,11 @@ func NewClient() (*Client, error) {
 // Scanning stops when ctx is cancelled.
 func (c *Client) Scan(ctx context.Context, handler func(addr, name string)) error {
 	filter := func(a ble.Advertisement) bool {
+		if a.LocalName() == "767_PowerHouse" {
+			return true
+		}
 		for _, svcUUID := range a.Services() {
-			if svcUUID.Equal(ble.MustParse(protocol.UUIDIdentifier)) {
+			if svcUUID.Equal(ble.MustParse(protocol.UUIDIdentifier)) || svcUUID.Equal(ble.MustParse("ff09")) {
 				return true
 			}
 		}
@@ -62,11 +64,8 @@ func (c *Client) Scan(ctx context.Context, handler func(addr, name string)) erro
 // Connect establishes a BLE connection to the device at addr (e.g.
 // "E8:EE:CC:7C:0A:2A"). Returns an open connection or an error.
 func (c *Client) Connect(ctx context.Context, addr string) (*Connection, error) {
-	filter := func(a ble.Advertisement) bool {
-		return a.Addr().String() == addr
-	}
-
-	conn, err := ble.Connect(ctx, filter)
+	a := ble.NewAddr(addr)
+	conn, err := ble.Dial(ctx, a)
 	if err != nil {
 		return nil, fmt.Errorf("ble: connect to %s: %w", addr, err)
 	}
