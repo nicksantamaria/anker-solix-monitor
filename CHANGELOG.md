@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.0.1...v1.1.0) (2026-08-12)
+
+
+### Features
+
+* add linux/arm GOARM=6 build permutation ([#10](https://github.com/nicksantamaria/anker-solix-monitor/issues/10)) ([984d575](https://github.com/nicksantamaria/anker-solix-monitor/commit/984d5752e27c81c30485a453e0864335c112108b))
+
+
+### Bug Fixes
+
+* BLE notification fragmentation on Linux (Raspberry Pi) ([#9](https://github.com/nicksantamaria/anker-solix-monitor/issues/9)) ([1ff646e](https://github.com/nicksantamaria/anker-solix-monitor/commit/1ff646e4d23e873193cbd59fd289e53c3349f1d7))
+
 ## [1.0.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.0.0...v1.0.1) (2026-08-12)
 
 
