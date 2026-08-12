@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/go-ble/ble v0.0.0-20240122180141-8c5522f54333
+	github.com/urfave/cli/v3 v3.10.1
 	modernc.org/sqlite v1.56.0
 )
 
@@ -21,7 +22,6 @@ require (
 	github.com/raff/goble v0.0.0-20190909174656-72afc67d6a99 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sirupsen/logrus v1.5.0 // indirect
-	github.com/urfave/cli/v3 v3.10.1 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
