@@ -159,27 +159,41 @@
       return;
     }
 
-    const nowMs = Date.now();
-    const windowStartMs = nowMs - (5 * 60 * 1000);
-    const recent = rows.filter(r => {
-      const tsMs = new Date(r.timestamp).getTime();
-      return Number.isFinite(tsMs) && tsMs >= windowStartMs && r.battery_percent != null;
-    });
+    const points = rows.map(r => {
+      return { row: r, tsMs: new Date(r.timestamp).getTime() };
+    }).filter(entry => Number.isFinite(entry.tsMs) && entry.row.battery_percent != null);
+    if (points.length < 2) {
+      el.textContent = "—";
+      return;
+    }
+
+    const latestTsMs = Math.max(...points.map(entry => entry.tsMs));
+    const windowStartMs = latestTsMs - (5 * 60 * 1000);
+    const recent = points.filter(entry => entry.tsMs >= windowStartMs)
+      .sort((a, b) => a.tsMs - b.tsMs);
     if (recent.length < 2) {
       el.textContent = "—";
       return;
     }
 
-    const first = recent[0];
-    const last = recent[recent.length - 1];
-    const elapsedMs = new Date(last.timestamp).getTime() - new Date(first.timestamp).getTime();
+    const oldestPoint = recent[0];
+    const newestPoint = recent[recent.length - 1];
+    const elapsedMs = newestPoint.tsMs - oldestPoint.tsMs;
     if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
       el.textContent = "—";
       return;
     }
 
-    const dischargePct = first.battery_percent - last.battery_percent;
-    if (dischargePct <= 0) {
+    const dischargePct = oldestPoint.row.battery_percent - newestPoint.row.battery_percent;
+    if (!Number.isFinite(dischargePct)) {
+      el.textContent = "—";
+      return;
+    }
+    if (dischargePct < -0.1) {
+      el.textContent = "Charging";
+      return;
+    }
+    if (dischargePct <= 0.1) {
       el.textContent = "—";
       return;
     }
@@ -190,7 +204,7 @@
       return;
     }
 
-    const remainingHours = last.battery_percent / dischargeRatePctPerHour;
+    const remainingHours = newestPoint.row.battery_percent / dischargeRatePctPerHour;
     const display = fmtDurationHours(remainingHours);
     el.textContent = display;
   }
