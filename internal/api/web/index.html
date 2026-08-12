@@ -134,9 +134,13 @@
 <script>
 (function () {
   const STALE_MS = 3 * 60 * 1000;
+  const STATUS_REFRESH_MS = 30 * 1000;
+  const CHARTS_REFRESH_MS = 60 * 1000;
+  const FETCH_TIMEOUT_MS = 10 * 1000;
   let rangeHours = 24;
   const charts = {};
   let chartFetchController = null;
+  let statusRefreshInFlight = false;
 
   function fmt(v, dash = "—") {
     return (v === null || v === undefined) ? dash : v;
@@ -209,10 +213,22 @@
     el.textContent = display;
   }
 
+  function withCacheBust(url) {
+    const sep = url.includes("?") ? "&" : "?";
+    return url + sep + "_ts=" + Date.now();
+  }
+
   async function fetchJSON(url) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(url + " -> " + res.status);
-    return res.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const reqURL = withCacheBust(url);
+      const res = await fetch(reqURL, { signal: controller.signal, cache: "no-store" });
+      if (!res.ok) throw new Error(url + " -> " + res.status);
+      return res.json();
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   function setBadge(connected, ts) {
@@ -229,6 +245,8 @@
   }
 
   async function refreshStatus() {
+    if (statusRefreshInFlight) return;
+    statusRefreshInFlight = true;
     try {
       const [status, health] = await Promise.all([
         fetchJSON("/api/status").catch(() => null),
@@ -267,6 +285,8 @@
       document.getElementById("statusLine").textContent = parts.join(" · ") || "No health data";
     } catch (e) {
       document.getElementById("statusLine").textContent = "Error: " + e.message;
+    } finally {
+      statusRefreshInFlight = false;
     }
   }
 
@@ -370,7 +390,7 @@
     chartFetchController = new AbortController();
     const signal = chartFetchController.signal;
     try {
-      const res = await fetch("/api/history?hours=" + rangeHours, { signal });
+      const res = await fetch(withCacheBust("/api/history?hours=" + rangeHours), { signal, cache: "no-store" });
       if (!res.ok) throw new Error("/api/history -> " + res.status);
       const rows = await res.json();
       const labels = rows.map(r => labelFor(r.timestamp));
@@ -435,8 +455,8 @@
     initControls();
     refreshStatus();
     refreshCharts();
-    setInterval(refreshStatus, 30000);
-    setInterval(refreshCharts, 60000);
+    setInterval(refreshStatus, STATUS_REFRESH_MS);
+    setInterval(refreshCharts, CHARTS_REFRESH_MS);
     makeDraggable("cards", "solix-cards-order");
     makeDraggable("charts", "solix-charts-order");
   });

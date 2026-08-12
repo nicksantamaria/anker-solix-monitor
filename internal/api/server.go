@@ -108,7 +108,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func setNoCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	setNoCache(w)
 	row, err := s.store.Latest(r.Context(), s.cfg.DeviceAddr)
 	if err != nil {
 		s.log.Error("status: latest", "error", err)
@@ -123,6 +130,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	setNoCache(w)
 	hours := 24
 	if v := r.URL.Query().Get("hours"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -147,6 +155,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	setNoCache(w)
 	dbOK := s.store.Ping(r.Context()) == nil
 
 	var lastErr *string

@@ -183,3 +183,26 @@ func TestIndexEndpoint(t *testing.T) {
 		t.Errorf("unexpected content type: %q", ct)
 	}
 }
+
+func TestAPIEndpointsSetNoCacheHeaders(t *testing.T) {
+	srv := newTestServer(&mockStore{
+		latest:  &database.TelemetryRow{ID: 1},
+		history: []database.TelemetryRow{},
+	}, &mockMonitor{})
+
+	tests := []string{"/api/status", "/api/history", "/api/health"}
+	for _, path := range tests {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if got := rec.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+			t.Errorf("%s Cache-Control: got %q", path, got)
+		}
+		if got := rec.Header().Get("Pragma"); got != "no-cache" {
+			t.Errorf("%s Pragma: got %q", path, got)
+		}
+		if got := rec.Header().Get("Expires"); got != "0" {
+			t.Errorf("%s Expires: got %q", path, got)
+		}
+	}
+}
