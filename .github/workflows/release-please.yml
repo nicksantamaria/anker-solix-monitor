@@ -24,16 +24,37 @@ jobs:
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     strategy:
       matrix:
-        goos: [linux, darwin]
-        goarch: [amd64, arm64]
         include:
           - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            cgo_enabled: 0
+            ldflags: "-s -w -extldflags=-static"
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+            cgo_enabled: 0
+            ldflags: "-s -w -extldflags=-static"
+          - goos: linux
             goarch: arm
+            runner: ubuntu-latest
+            cgo_enabled: 0
+            ldflags: "-s -w -extldflags=-static"
+          - goos: darwin
+            goarch: amd64
+            runner: macos-latest
+            cgo_enabled: 1
+            ldflags: "-s -w"
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+            cgo_enabled: 1
+            ldflags: "-s -w"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,9 +68,9 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
         run: |
-          go build -ldflags="-s -w -extldflags=-static" \
+          go build -ldflags="${{ matrix.ldflags }}" \
             -o dist/solix-cli-${{ matrix.goos }}-${{ matrix.goarch }} \
             ./cmd/solix-cli
 
@@ -57,9 +78,9 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
         run: |
-          go build -ldflags="-s -w -extldflags=-static" \
+          go build -ldflags="${{ matrix.ldflags }}" \
             -o dist/solix-monitor-${{ matrix.goos }}-${{ matrix.goarch }} \
             ./cmd/solix-monitor
 
