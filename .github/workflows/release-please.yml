@@ -45,6 +45,13 @@ jobs:
             runner: ubuntu-latest
             cgo_enabled: 0
             ldflags: "-s -w -extldflags=-static"
+          - goos: linux
+            goarch: arm
+            goarm: 6
+            suffix: v6
+            runner: ubuntu-latest
+            cgo_enabled: 0
+            ldflags: "-s -w -extldflags=-static"
           - goos: darwin
             goarch: amd64
             runner: macos-latest
@@ -68,26 +75,28 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
         run: |
           go build -ldflags="${{ matrix.ldflags }}" \
-            -o dist/solix-cli-${{ matrix.goos }}-${{ matrix.goarch }} \
+            -o dist/solix-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} \
             ./cmd/solix-cli
 
       - name: Build solix-monitor
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: ${{ matrix.cgo_enabled }}
         run: |
           go build -ldflags="${{ matrix.ldflags }}" \
-            -o dist/solix-monitor-${{ matrix.goos }}-${{ matrix.goarch }} \
+            -o dist/solix-monitor-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} \
             ./cmd/solix-monitor
 
       - name: Upload to release
         run: |
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            dist/solix-cli-${{ matrix.goos }}-${{ matrix.goarch }} \
-            dist/solix-monitor-${{ matrix.goos }}-${{ matrix.goarch }}
+            dist/solix-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} \
+            dist/solix-monitor-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
