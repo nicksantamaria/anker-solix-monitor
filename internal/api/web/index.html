@@ -226,6 +226,11 @@
       const res = await fetch(reqURL, { signal: controller.signal, cache: "no-store" });
       if (!res.ok) throw new Error(url + " -> " + res.status);
       return res.json();
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        throw new Error(url + " timeout");
+      }
+      throw e;
     } finally {
       clearTimeout(timeout);
     }
