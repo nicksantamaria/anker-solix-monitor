@@ -49,6 +49,36 @@ var TelemetryCommands = map[string]bool{
 	"c405": true,
 }
 
+// Control command codes for Gen1 devices (C300, C800, C1000, F2600, F3800).
+// These are written to UUIDCommand as encrypted packets.
+const (
+	// CmdACOutput toggles the AC inverter output.
+	CmdACOutput = "404a"
+	// CmdDCOutput toggles the DC / 12 V output.
+	CmdDCOutput = "404b"
+	// CmdACChargePower sets the AC charging power limit in watts (F2600 only,
+	// valid range 100–1440 W).
+	CmdACChargePower = "4044"
+	// CmdDisplayTimeout sets the display auto-off timeout.
+	CmdDisplayTimeout = "4046"
+	// CmdDisplayBrightness sets the display brightness level.
+	CmdDisplayBrightness = "404c"
+	// CmdLEDMode sets the LED light bar mode.
+	CmdLEDMode = "404f"
+	// CmdDisplayOnOff toggles the display on or off.
+	CmdDisplayOnOff = "4052"
+	// CmdPowerSaving toggles power saving mode.
+	CmdPowerSaving = "404e"
+)
+
+// Control command codes for Gen2 devices (C1000 Gen2 / A1763).
+const (
+	// CmdACOutputGen2 toggles the AC inverter output on Gen2 devices.
+	CmdACOutputGen2 = "4101"
+	// CmdDCOutputGen2 toggles the DC / 12 V output on Gen2 devices.
+	CmdDCOutputGen2 = "4102"
+)
+
 // Negotiation command bytes as defined in the Python reference implementation.
 // These are fixed payloads that implement the ECDH handshake protocol.
 const (

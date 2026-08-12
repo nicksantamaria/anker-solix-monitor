@@ -30,6 +30,7 @@ func main() {
 			scanCommand(),
 			statusCommand(),
 			monitorCommand(),
+			setCommand(),
 		},
 	}
 
@@ -356,4 +357,245 @@ func printStatus(s solix.DeviceStatus) {
 	}
 	fmt.Printf("Temperature:              %d °C\n", s.Temperature)
 	fmt.Printf("Last Updated:             %s\n", s.UpdatedAt.Format(time.RFC3339))
+}
+
+// ---- set ----------------------------------------------------------------
+
+// setCommand returns the top-level "set" command which groups all control
+// sub-commands. Each sub-command connects to the device, sends a single
+// command, and disconnects.
+func setCommand() *cli.Command {
+	// commonFlags are shared across all set sub-commands.
+	commonFlags := []cli.Flag{
+		&cli.StringFlag{
+			Name:    "addr",
+			Usage:   "Device MAC address (or omit to auto-discover)",
+			Sources: cli.EnvVars("SOLIX_ADDRESS"),
+		},
+		&cli.DurationFlag{
+			Name:    "scan-timeout",
+			Value:   10 * time.Second,
+			Usage:   "How long to scan when auto-discovering",
+			Sources: cli.EnvVars("SOLIX_SCAN_TIMEOUT"),
+		},
+		&cli.DurationFlag{
+			Name:    "connect-timeout",
+			Value:   15 * time.Second,
+			Usage:   "BLE connection timeout",
+			Sources: cli.EnvVars("SOLIX_CONNECT_TIMEOUT"),
+		},
+		&cli.DurationFlag{
+			Name:    "nego-timeout",
+			Value:   30 * time.Second,
+			Usage:   "ECDH negotiation timeout",
+			Sources: cli.EnvVars("SOLIX_NEGO_TIMEOUT"),
+		},
+	}
+
+	// connectAndSend is a helper that connects, runs fn with the device, then
+	// disconnects.  All sub-command actions delegate to this.
+	connectAndSend := func(ctx context.Context, cmd *cli.Command, fn func(context.Context, *solix.Device) error) error {
+		client, err := solix.NewClient(solix.Config{
+			ScanTimeout:        cmd.Duration("scan-timeout"),
+			ConnectTimeout:     cmd.Duration("connect-timeout"),
+			NegotiationTimeout: cmd.Duration("nego-timeout"),
+			Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to initialise BLE: %w", err)
+		}
+
+		targetAddr := cmd.String("addr")
+		if targetAddr == "" {
+			targetAddr, err = autoDiscover(ctx, client)
+			if err != nil {
+				return err
+			}
+		}
+
+		device, err := connect(ctx, client, targetAddr)
+		if err != nil {
+			return err
+		}
+		defer device.Disconnect()
+
+		return fn(ctx, device)
+	}
+
+	return &cli.Command{
+		Name:  "set",
+		Usage: "Send a control command to a Solix device",
+		Commands: []*cli.Command{
+			{
+				Name:  "ac-output",
+				Usage: "Turn the AC inverter output on or off (usage: ac-output <on|off>)",
+				Flags: commonFlags,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					on, err := parseOnOff(cmd)
+					if err != nil {
+						return err
+					}
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetACOutput(ctx, on); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "AC output %s\n", onOffStr(on))
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "dc-output",
+				Usage: "Turn the DC / 12 V output on or off (usage: dc-output <on|off>)",
+				Flags: commonFlags,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					on, err := parseOnOff(cmd)
+					if err != nil {
+						return err
+					}
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetDCOutput(ctx, on); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "DC output %s\n", onOffStr(on))
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "ac-charge-rate",
+				Usage: "Set the AC charging power limit in watts (F2600 only, range 100–1440 W)",
+				Flags: append(commonFlags, &cli.IntFlag{
+					Name:     "watts",
+					Required: true,
+					Usage:    "Charging power in watts (100–1440)",
+				}),
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					watts := cmd.Int("watts")
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetACChargePower(ctx, int(watts)); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "AC charge rate set to %d W\n", watts)
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "display-timeout",
+				Usage: "Set the display auto-off timeout in seconds (0 = always on)",
+				Flags: append(commonFlags, &cli.IntFlag{
+					Name:     "seconds",
+					Required: true,
+					Usage:    "Timeout in seconds (0–65535); 0 keeps the display always on",
+				}),
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					secs := cmd.Int("seconds")
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetDisplayTimeout(ctx, int(secs)); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "Display timeout set to %d s\n", secs)
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "display-brightness",
+				Usage: "Set the display brightness level (0=off, 1=low, 2=medium, 3=high)",
+				Flags: append(commonFlags, &cli.IntFlag{
+					Name:     "level",
+					Required: true,
+					Usage:    "Brightness level (0–3)",
+				}),
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					level := cmd.Int("level")
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetDisplayBrightness(ctx, int(level)); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "Display brightness set to %d\n", level)
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "led",
+				Usage: "Set the LED light bar mode (0=off, 1=low, 2=medium, 3=high, 4=SOS)",
+				Flags: append(commonFlags, &cli.IntFlag{
+					Name:     "level",
+					Required: true,
+					Usage:    "LED mode (0–4)",
+				}),
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					level := cmd.Int("level")
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetLED(ctx, int(level)); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "LED level set to %d\n", level)
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "display",
+				Usage: "Turn the display on or off (usage: display <on|off>)",
+				Flags: commonFlags,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					on, err := parseOnOff(cmd)
+					if err != nil {
+						return err
+					}
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetDisplay(ctx, on); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "Display %s\n", onOffStr(on))
+						return nil
+					})
+				},
+			},
+			{
+				Name:  "power-saving",
+				Usage: "Enable or disable power saving mode (usage: power-saving <on|off>)",
+				Flags: commonFlags,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					on, err := parseOnOff(cmd)
+					if err != nil {
+						return err
+					}
+					return connectAndSend(ctx, cmd, func(ctx context.Context, d *solix.Device) error {
+						if err := d.SetPowerSaving(ctx, on); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "Power saving %s\n", onOffStr(on))
+						return nil
+					})
+				},
+			},
+		},
+	}
+}
+
+// parseOnOff reads the first positional argument and returns true for "on",
+// false for "off", or an error if the argument is missing or unrecognised.
+func parseOnOff(cmd *cli.Command) (bool, error) {
+	arg := cmd.Args().First()
+	switch arg {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected 'on' or 'off', got %q", arg)
+	}
+}
+
+// onOffStr returns "on" or "off" for use in status messages.
+func onOffStr(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }

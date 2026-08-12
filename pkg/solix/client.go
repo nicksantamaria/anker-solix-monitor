@@ -246,6 +246,11 @@ func (c *Client) connectEncrypted(ctx context.Context, conn ble.Client, profile 
 		dev.updateStatus(s)
 	}
 
+	// Wire command sending → Device
+	dev.mu.Lock()
+	dev.sendCmd = enc.sendCommand
+	dev.mu.Unlock()
+
 	// Background connection watchdog
 	go func() {
 		defer dev.markDisconnected()
@@ -588,6 +593,43 @@ func (e *encryptedSession) processTelemetryPacket(payload []byte, cmdKey string)
 	if e.onTelemetry != nil {
 		e.onTelemetry(params)
 	}
+}
+
+// sendCommand encrypts and sends a control command to the device.
+//
+// cmd is the 2-byte command code (e.g. hex.DecodeString("404a")).
+// payload is the unencrypted TLV payload built with the protocol helpers.
+//
+// The anti-replay timestamp suffix is appended automatically before encryption.
+func (e *encryptedSession) sendCommand(cmd, payload []byte) error {
+	if e.sharedSecret == nil {
+		return fmt.Errorf("cannot send command: negotiation not complete")
+	}
+
+	elapsed := uint32(0)
+	if e.negoTS.IsZero() {
+		return fmt.Errorf("cannot send command: negotiation timestamp not recorded")
+	}
+	if secs := time.Since(e.negoTS).Seconds(); secs > 0 {
+		elapsed = uint32(secs)
+	}
+	fullPayload := protocol.BuildCommandPayload(payload, elapsed)
+
+	encrypted, err := protocol.EncryptPayload(e.sharedSecret, fullPayload)
+	if err != nil {
+		return fmt.Errorf("encrypt command payload: %w", err)
+	}
+
+	pkt := protocol.BuildPacket(protocol.EncryptedSendPattern(), cmd, encrypted)
+	e.log.Debug("sending command", "cmd", fmt.Sprintf("%x", cmd), "pkt_len", len(pkt))
+
+	if err := e.conn.WriteCharacteristic(e.cmdChar, pkt, true); err != nil {
+		e.log.Debug("write command failed (noRsp=true), retrying with response", "err", err)
+		if err := e.conn.WriteCharacteristic(e.cmdChar, pkt, false); err != nil {
+			return fmt.Errorf("write command characteristic: %w", err)
+		}
+	}
+	return nil
 }
 
 // f2000Session manages the unencrypted F2000 BLE session.
