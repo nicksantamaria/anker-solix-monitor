@@ -135,6 +135,7 @@
   const STALE_MS = 3 * 60 * 1000;
   let rangeHours = 24;
   const charts = {};
+  let chartFetchController = null;
 
   function fmt(v, dash = "—") {
     return (v === null || v === undefined) ? dash : v;
@@ -295,8 +296,15 @@
   }
 
   async function refreshCharts() {
+    if (chartFetchController) {
+      chartFetchController.abort();
+    }
+    chartFetchController = new AbortController();
+    const signal = chartFetchController.signal;
     try {
-      const rows = await fetchJSON("/api/history?hours=" + rangeHours);
+      const res = await fetch("/api/history?hours=" + rangeHours, { signal });
+      if (!res.ok) throw new Error("/api/history -> " + res.status);
+      const rows = await res.json();
       const labels = rows.map(r => labelFor(r.timestamp));
       const setData = (chart, key) => {
         chart.data.labels = labels;
@@ -323,7 +331,7 @@
       charts.usb.data.datasets[4].data = rows.map(r => r.usbc3_power_w || 0);
       charts.usb.update();
     } catch (e) {
-      console.error("charts", e);
+      if (e.name !== "AbortError") console.error("charts", e);
     }
   }
 
