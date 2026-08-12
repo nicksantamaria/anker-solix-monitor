@@ -597,6 +597,7 @@ type f2000Session struct {
 	notifyChar  *ble.Characteristic
 	log         *slog.Logger
 	onTelemetry func(status models.F2000Status)
+	recvBuf     []byte // reassembly buffer for fragmented BLE notifications
 }
 
 func newF2000Session(conn ble.Client, writeChar, notifyChar *ble.Characteristic, log *slog.Logger) *f2000Session {
@@ -619,38 +620,70 @@ func newF2000Session(conn ble.Client, writeChar, notifyChar *ble.Characteristic,
 //	byte[7:9]  length (little-endian)
 //	...payload...
 //	last byte  checksum (sum of all bytes & 0xFF)
+//
+// On Linux/BlueZ the BLE stack delivers notifications in 20-byte MTU chunks,
+// so this function reassembles fragments before processing.
 func (f *f2000Session) onNotification(data []byte) {
-	if len(data) < 8 {
+	// If this fragment starts with the packet header (09 FF), begin a new reassembly.
+	if len(data) >= 2 && data[0] == 0x09 && data[1] == 0xFF {
+		f.recvBuf = append(f.recvBuf[:0], data...)
+	} else if len(f.recvBuf) > 0 {
+		// Continuation fragment — append to existing buffer.
+		f.recvBuf = append(f.recvBuf, data...)
+	} else {
+		// Fragment without a preceding header — discard.
 		f.log.Warn("F2000 short notification", "len", len(data))
 		return
 	}
 
+	// Wait until we have enough bytes to read the declared length (bytes[7:9]).
+	if len(f.recvBuf) < 9 {
+		return
+	}
+	expected := int(binary.LittleEndian.Uint16(f.recvBuf[7:9]))
+	if len(f.recvBuf) < expected {
+		// Still waiting for more fragments.
+		return
+	}
+
+	// We have a complete packet; extract exactly `expected` bytes and reset the
+	// buffer so the old backing array can be garbage collected.
+	complete := make([]byte, expected)
+	copy(complete, f.recvBuf[:expected])
+	if len(f.recvBuf) > expected {
+		remainder := make([]byte, len(f.recvBuf)-expected)
+		copy(remainder, f.recvBuf[expected:])
+		f.recvBuf = remainder
+	} else {
+		f.recvBuf = f.recvBuf[:0]
+	}
+
 	// Validate checksum: XOR of all bytes should be 0, OR sum of preceding bytes should equal last byte
 	var xorSum byte
-	for _, b := range data {
+	for _, b := range complete {
 		xorSum ^= b
 	}
 
 	if xorSum != 0 {
 		var addSum byte
-		for i := 0; i < len(data)-1; i++ {
-			addSum += data[i]
+		for i := 0; i < len(complete)-1; i++ {
+			addSum += complete[i]
 		}
-		if addSum != data[len(data)-1] {
-			f.log.Warn("F2000 checksum mismatch", "xor", fmt.Sprintf("%02x", xorSum), "add", fmt.Sprintf("%02x", addSum), "expected", fmt.Sprintf("%02x", data[len(data)-1]), "raw", fmt.Sprintf("%x", data))
+		if addSum != complete[len(complete)-1] {
+			f.log.Warn("F2000 checksum mismatch", "xor", fmt.Sprintf("%02x", xorSum), "add", fmt.Sprintf("%02x", addSum), "expected", fmt.Sprintf("%02x", complete[len(complete)-1]), "raw", fmt.Sprintf("%x", complete))
 			return
 		}
 	}
 
-	subType := data[6]
+	subType := complete[6]
 	switch subType {
 	case 0x49, 0x01:
 		// Telemetry packet (0x49 is 102 bytes, 0x01 is 122 bytes)
-		if len(data) < 102 {
-			f.log.Warn("F2000 telemetry packet too short", "len", len(data))
+		if len(complete) < 102 {
+			f.log.Warn("F2000 telemetry packet too short", "len", len(complete))
 			return
 		}
-		s := parseF2000Telemetry(data)
+		s := parseF2000Telemetry(complete)
 		if f.onTelemetry != nil {
 			f.onTelemetry(s)
 		}
