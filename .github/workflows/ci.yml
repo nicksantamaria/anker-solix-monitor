@@ -2,13 +2,11 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
   pull_request:
 
 jobs:
   test:
-    name: Unit Tests
+    name: Build, Vet & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,5 +16,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run tests
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
         run: go test ./...
