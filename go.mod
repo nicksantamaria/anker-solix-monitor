@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/go-ble/ble v0.0.0-20240122180141-8c5522f54333
+	github.com/urfave/cli/v3 v3.10.1
 	modernc.org/sqlite v1.56.0
 )
 

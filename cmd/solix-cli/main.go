@@ -4,14 +4,13 @@
 // Usage (requires root or CAP_NET_RAW for BLE):
 //
 //	sudo solix-cli scan
-//	sudo solix-cli status -addr E8:EE:CC:7C:0A:2A
-//	sudo solix-cli monitor -addr E8:EE:CC:7C:0A:2A
+//	sudo solix-cli status --addr E8:EE:CC:7C:0A:2A
+//	sudo solix-cli monitor --addr E8:EE:CC:7C:0A:2A
 package main
 
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,219 +19,275 @@ import (
 	"time"
 
 	"github.com/nicksantamaria/anker-solix-monitor/pkg/solix"
+	"github.com/urfave/cli/v3"
 )
 
-const usage = `solix-cli - Anker Solix BLE command-line interface
-
-Usage:
-  solix-cli <command> [flags]
-
-Commands:
-  scan      Scan for nearby Solix devices and print their addresses.
-  status    Connect to a device and print a single telemetry snapshot.
-  monitor   Connect to a device and stream telemetry updates until interrupted.
-
-Global flags:
-  -log-level string   Log level: debug, info, warn, error (default "warn")
-
-Run 'solix-cli <command> -help' for command-specific flags.
-`
-
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(1)
+	app := &cli.Command{
+		Name:  "solix-cli",
+		Usage: "Anker Solix BLE command-line interface",
+		Commands: []*cli.Command{
+			scanCommand(),
+			statusCommand(),
+			monitorCommand(),
+		},
 	}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	switch cmd {
-	case "scan":
-		runScan(args)
-	case "status":
-		runStatus(args)
-	case "monitor":
-		runMonitor(args)
-	case "-h", "--help", "help":
-		fmt.Print(usage)
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
+	if err := app.Run(ctx, os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 // ---- scan ---------------------------------------------------------------
 
-func runScan(args []string) {
-	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	scanTimeout := fs.Duration("scan-timeout", 10*time.Second, "How long to scan for devices")
-	outputJSON := fs.Bool("json", false, "Output results as JSON")
-	_ = fs.Parse(args)
+func scanCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "scan",
+		Usage: "Scan for nearby Solix devices and print their addresses",
+		Flags: []cli.Flag{
+			&cli.DurationFlag{
+				Name:    "scan-timeout",
+				Value:   10 * time.Second,
+				Usage:   "How long to scan for devices",
+				Sources: cli.EnvVars("SOLIX_SCAN_TIMEOUT"),
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Output results as JSON",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			client, err := solix.NewClient(solix.Config{
+				ScanTimeout: cmd.Duration("scan-timeout"),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialise BLE: %w", err)
+			}
 
-	client, err := solix.NewClient(solix.Config{
-		ScanTimeout: *scanTimeout,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to initialise BLE: %v\n", err)
-		os.Exit(1)
-	}
+			fmt.Fprintln(os.Stderr, "Scanning for Solix devices...")
+			devices, err := client.Scan(ctx)
+			if err != nil {
+				return fmt.Errorf("scan failed: %w", err)
+			}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+			if len(devices) == 0 {
+				fmt.Fprintln(os.Stderr, "No Solix devices found.")
+				return nil
+			}
 
-	fmt.Fprintln(os.Stderr, "Scanning for Solix devices...")
-	devices, err := client.Scan(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: scan failed: %v\n", err)
-		os.Exit(1)
-	}
+			if cmd.Bool("json") {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				_ = enc.Encode(devices)
+				return nil
+			}
 
-	if len(devices) == 0 {
-		fmt.Fprintln(os.Stderr, "No Solix devices found.")
-		os.Exit(0)
-	}
-
-	if *outputJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(devices)
-		return
-	}
-
-	fmt.Printf("Found %d device(s):\n", len(devices))
-	for i, d := range devices {
-		fmt.Printf("  [%d] %-24s  addr=%-18s  rssi=%d\n", i+1, d.Name, d.Addr, d.RSSI)
+			fmt.Printf("Found %d device(s):\n", len(devices))
+			for i, d := range devices {
+				fmt.Printf("  [%d] %-24s  addr=%-18s  rssi=%d\n", i+1, d.Name, d.Addr, d.RSSI)
+			}
+			return nil
+		},
 	}
 }
 
 // ---- status -------------------------------------------------------------
 
-func runStatus(args []string) {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	addr := fs.String("addr", "", "Device MAC address (required, or omit to auto-discover)")
-	scanTimeout := fs.Duration("scan-timeout", 10*time.Second, "How long to scan when auto-discovering")
-	connectTimeout := fs.Duration("connect-timeout", 5*time.Second, "BLE connection timeout")
-	negoTimeout := fs.Duration("nego-timeout", 5*time.Second, "ECDH negotiation timeout")
-	waitTimeout := fs.Duration("wait-timeout", 10*time.Second, "How long to wait for first telemetry")
-	outputJSON := fs.Bool("json", false, "Output result as JSON")
-	_ = fs.Parse(args)
+func statusCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "status",
+		Usage: "Connect to a device and print a single telemetry snapshot",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "addr",
+				Usage:   "Device MAC address (or omit to auto-discover)",
+				Sources: cli.EnvVars("SOLIX_ADDRESS"),
+			},
+			&cli.DurationFlag{
+				Name:    "scan-timeout",
+				Value:   10 * time.Second,
+				Usage:   "How long to scan when auto-discovering",
+				Sources: cli.EnvVars("SOLIX_SCAN_TIMEOUT"),
+			},
+			&cli.DurationFlag{
+				Name:    "connect-timeout",
+				Value:   5 * time.Second,
+				Usage:   "BLE connection timeout",
+				Sources: cli.EnvVars("SOLIX_CONNECT_TIMEOUT"),
+			},
+			&cli.DurationFlag{
+				Name:    "nego-timeout",
+				Value:   5 * time.Second,
+				Usage:   "ECDH negotiation timeout",
+				Sources: cli.EnvVars("SOLIX_NEGO_TIMEOUT"),
+			},
+			&cli.DurationFlag{
+				Name:    "wait-timeout",
+				Value:   10 * time.Second,
+				Usage:   "How long to wait for first telemetry",
+				Sources: cli.EnvVars("SOLIX_WAIT_TIMEOUT"),
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Output result as JSON",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			client, err := solix.NewClient(solix.Config{
+				ScanTimeout:        cmd.Duration("scan-timeout"),
+				ConnectTimeout:     cmd.Duration("connect-timeout"),
+				NegotiationTimeout: cmd.Duration("nego-timeout"),
+				Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialise BLE: %w", err)
+			}
 
-	client, err := solix.NewClient(solix.Config{
-		ScanTimeout:        *scanTimeout,
-		ConnectTimeout:     *connectTimeout,
-		NegotiationTimeout: *negoTimeout,
-		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to initialise BLE: %v\n", err)
-		os.Exit(1)
+			targetAddr := cmd.String("addr")
+			if targetAddr == "" {
+				targetAddr, err = autoDiscover(ctx, client)
+				if err != nil {
+					return err
+				}
+			}
+
+			device, err := connect(ctx, client, targetAddr)
+			if err != nil {
+				return err
+			}
+			defer device.Disconnect()
+
+			fmt.Println("Waiting for telemetry data...")
+			status, err := waitForStatus(ctx, device, cmd.Duration("wait-timeout"))
+			if err != nil {
+				return err
+			}
+
+			if cmd.Bool("json") {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				_ = enc.Encode(status)
+				return nil
+			}
+
+			printStatus(status)
+			return nil
+		},
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	targetAddr := *addr
-	if targetAddr == "" {
-		targetAddr = mustAutoDiscover(ctx, client)
-	}
-
-	device := mustConnect(ctx, client, targetAddr)
-	defer device.Disconnect()
-
-	fmt.Println("Waiting for telemetry data...")
-	status := mustWaitForStatus(ctx, device, *waitTimeout)
-
-	if *outputJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(status)
-		return
-	}
-
-	printStatus(status)
 }
 
 // ---- monitor ------------------------------------------------------------
 
-func runMonitor(args []string) {
-	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
-	addr := fs.String("addr", "", "Device MAC address (required, or omit to auto-discover)")
-	scanTimeout := fs.Duration("scan-timeout", 10*time.Second, "How long to scan when auto-discovering")
-	connectTimeout := fs.Duration("connect-timeout", 30*time.Second, "BLE connection timeout")
-	negoTimeout := fs.Duration("nego-timeout", 90*time.Second, "ECDH negotiation timeout")
-	outputJSON := fs.Bool("json", false, "Output each update as a JSON object")
-	_ = fs.Parse(args)
+func monitorCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "monitor",
+		Usage: "Connect to a device and stream telemetry updates until interrupted",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "addr",
+				Usage:   "Device MAC address (or omit to auto-discover)",
+				Sources: cli.EnvVars("SOLIX_ADDRESS"),
+			},
+			&cli.DurationFlag{
+				Name:    "scan-timeout",
+				Value:   10 * time.Second,
+				Usage:   "How long to scan when auto-discovering",
+				Sources: cli.EnvVars("SOLIX_SCAN_TIMEOUT"),
+			},
+			&cli.DurationFlag{
+				Name:    "connect-timeout",
+				Value:   30 * time.Second,
+				Usage:   "BLE connection timeout",
+				Sources: cli.EnvVars("SOLIX_CONNECT_TIMEOUT"),
+			},
+			&cli.DurationFlag{
+				Name:    "nego-timeout",
+				Value:   90 * time.Second,
+				Usage:   "ECDH negotiation timeout",
+				Sources: cli.EnvVars("SOLIX_NEGO_TIMEOUT"),
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Output each update as a JSON object",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			client, err := solix.NewClient(solix.Config{
+				ScanTimeout:        cmd.Duration("scan-timeout"),
+				ConnectTimeout:     cmd.Duration("connect-timeout"),
+				NegotiationTimeout: cmd.Duration("nego-timeout"),
+				Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to initialise BLE: %w", err)
+			}
 
-	client, err := solix.NewClient(solix.Config{
-		ScanTimeout:        *scanTimeout,
-		ConnectTimeout:     *connectTimeout,
-		NegotiationTimeout: *negoTimeout,
-		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to initialise BLE: %v\n", err)
-		os.Exit(1)
-	}
+			targetAddr := cmd.String("addr")
+			if targetAddr == "" {
+				targetAddr, err = autoDiscover(ctx, client)
+				if err != nil {
+					return err
+				}
+			}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+			device, err := connect(ctx, client, targetAddr)
+			if err != nil {
+				return err
+			}
+			defer device.Disconnect()
 
-	targetAddr := *addr
-	if targetAddr == "" {
-		targetAddr = mustAutoDiscover(ctx, client)
-	}
+			fmt.Fprintf(os.Stderr, "Monitoring %s (Ctrl-C to exit)...\n", targetAddr)
 
-	device := mustConnect(ctx, client, targetAddr)
-	defer device.Disconnect()
+			outputJSON := cmd.Bool("json")
+			device.AddCallback(func(status solix.DeviceStatus) {
+				if outputJSON {
+					enc := json.NewEncoder(os.Stdout)
+					_ = enc.Encode(status)
+					return
+				}
+				fmt.Printf("[%s] battery=%d%%  solar=%dW  ac_in=%dW  ac_out=%dW  temp=%d°C\n",
+					status.UpdatedAt.Format("15:04:05"),
+					status.BatteryPercent,
+					status.SolarPowerIn,
+					status.ACPowerIn,
+					status.ACPowerOut,
+					status.Temperature,
+				)
+			})
 
-	fmt.Fprintf(os.Stderr, "Monitoring %s (Ctrl-C to exit)...\n", targetAddr)
-
-	device.AddCallback(func(status solix.DeviceStatus) {
-		if *outputJSON {
-			enc := json.NewEncoder(os.Stdout)
-			_ = enc.Encode(status)
-			return
-		}
-		fmt.Printf("[%s] battery=%d%%  solar=%dW  ac_in=%dW  ac_out=%dW  temp=%d°C\n",
-			status.UpdatedAt.Format("15:04:05"),
-			status.BatteryPercent,
-			status.SolarPowerIn,
-			status.ACPowerIn,
-			status.ACPowerOut,
-			status.Temperature,
-		)
-	})
-
-	select {
-	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "Shutting down...")
-	case <-device.Disconnected():
-		fmt.Fprintln(os.Stderr, "Device disconnected.")
+			select {
+			case <-ctx.Done():
+				fmt.Fprintln(os.Stderr, "Shutting down...")
+			case <-device.Disconnected():
+				fmt.Fprintln(os.Stderr, "Device disconnected.")
+			}
+			return nil
+		},
 	}
 }
 
 // ---- helpers ------------------------------------------------------------
 
-// mustAutoDiscover scans for Solix devices and returns the first device's
-// address, exiting the process if none are found.
-func mustAutoDiscover(ctx context.Context, client *solix.Client) string {
-	fmt.Fprintln(os.Stderr, "No -addr specified, scanning for Solix devices...")
+// autoDiscover scans for Solix devices and returns the first device's address.
+func autoDiscover(ctx context.Context, client *solix.Client) (string, error) {
+	fmt.Fprintln(os.Stderr, "No --addr specified, scanning for Solix devices...")
 	devices, err := client.Scan(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: scan failed: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("scan failed: %w", err)
 	}
 	if len(devices) == 0 {
-		fmt.Fprintln(os.Stderr, "No Solix devices found.")
-		os.Exit(1)
+		return "", fmt.Errorf("no Solix devices found")
 	}
 	fmt.Printf("Found %d device(s), using first: %s (%s)\n", len(devices), devices[0].Name, devices[0].Addr)
-	return devices[0].Addr
+	return devices[0].Addr, nil
 }
 
-// mustConnect connects to addr and exits on error.
-func mustConnect(ctx context.Context, client *solix.Client, addr string) *solix.Device {
+// connect connects to addr, retrying once after a brief scan on failure.
+func connect(ctx context.Context, client *solix.Client, addr string) (*solix.Device, error) {
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", addr)
 	device, err := client.Connect(ctx, addr)
 	if err != nil {
@@ -245,34 +300,31 @@ func mustConnect(ctx context.Context, client *solix.Client, addr string) *solix.
 		fmt.Fprintf(os.Stderr, "Retrying connection to %s...\n", addr)
 		device, err = client.Connect(ctx, addr)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: connect failed: %v\n", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("connect failed: %w", err)
 		}
 	}
 	fmt.Fprintf(os.Stderr, "Connected to %s (%s)\n", device.Name(), device.Addr())
-	return device
+	return device, nil
 }
 
-// mustWaitForStatus polls device.Status until data is available or waitTimeout elapses.
-func mustWaitForStatus(ctx context.Context, device *solix.Device, waitTimeout time.Duration) solix.DeviceStatus {
+// waitForStatus polls device.Status until data is available or waitTimeout elapses.
+func waitForStatus(ctx context.Context, device *solix.Device, waitTimeout time.Duration) (solix.DeviceStatus, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
 	defer cancel()
 
 	for {
 		select {
 		case <-waitCtx.Done():
-			fmt.Fprintln(os.Stderr, "error: timed out waiting for telemetry data")
-			os.Exit(1)
+			return solix.DeviceStatus{}, fmt.Errorf("timed out waiting for telemetry data")
 		case <-time.After(500 * time.Millisecond):
 			status, err := device.Status(ctx)
 			if err == solix.ErrNoData {
 				continue
 			}
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: status read failed: %v\n", err)
-				os.Exit(1)
+				return solix.DeviceStatus{}, fmt.Errorf("status read failed: %w", err)
 			}
-			return status
+			return status, nil
 		}
 	}
 }
