@@ -80,6 +80,12 @@
   canvas { max-height: 240px; }
   .chart-panel--gauge canvas { max-height: 200px; }
   footer { margin-top: 20px; font-size: 0.75rem; color: var(--muted); text-align: center; }
+
+  /* Drag-and-drop */
+  .card[draggable], .chart-panel[draggable] { cursor: grab; }
+  .card[draggable]:active, .chart-panel[draggable]:active { cursor: grabbing; }
+  .drag-over { outline: 2px dashed var(--blue); outline-offset: 2px; }
+  .dragging { opacity: 0.4; }
 </style>
 </head>
 <body>
@@ -92,16 +98,16 @@
 </header>
 
 <section class="cards" id="cards">
-  <div class="card">
+  <div class="card" draggable="true" data-id="card-battery">
     <div class="label">Battery</div>
     <div class="value" id="battery">—<span class="unit">%</span></div>
     <div class="battery-fill"><span id="batteryFill" style="width:0%"></span></div>
   </div>
-  <div class="card"><div class="label">Solar In</div><div class="value" id="solar">—<span class="unit">W</span></div></div>
-  <div class="card"><div class="label">AC In</div><div class="value" id="acIn">—<span class="unit">W</span></div></div>
-  <div class="card"><div class="label">AC Out</div><div class="value" id="acOut">—<span class="unit">W</span></div></div>
-  <div class="card"><div class="label">DC Out</div><div class="value" id="dcOut">—<span class="unit">W</span></div></div>
-  <div class="card"><div class="label">Temperature</div><div class="value" id="temp">—<span class="unit">°C</span></div></div>
+  <div class="card" draggable="true" data-id="card-solar"><div class="label">Solar In</div><div class="value" id="solar">—<span class="unit">W</span></div></div>
+  <div class="card" draggable="true" data-id="card-acin"><div class="label">AC In</div><div class="value" id="acIn">—<span class="unit">W</span></div></div>
+  <div class="card" draggable="true" data-id="card-acout"><div class="label">AC Out</div><div class="value" id="acOut">—<span class="unit">W</span></div></div>
+  <div class="card" draggable="true" data-id="card-dcout"><div class="label">DC Out</div><div class="value" id="dcOut">—<span class="unit">W</span></div></div>
+  <div class="card" draggable="true" data-id="card-temp"><div class="label">Temperature</div><div class="value" id="temp">—<span class="unit">°C</span></div></div>
 </section>
 
 <div class="controls" id="rangeControls">
@@ -111,15 +117,15 @@
   <button data-hours="168">7d</button>
 </div>
 
-<section class="charts">
-  <div class="chart-panel"><h3>Battery %</h3><canvas id="chartBattery"></canvas></div>
-  <div class="chart-panel"><h3>Solar Power (W)</h3><canvas id="chartSolar"></canvas></div>
-  <div class="chart-panel"><h3>AC Output (W)</h3><canvas id="chartAcOut"></canvas></div>
-  <div class="chart-panel"><h3>AC Input (W)</h3><canvas id="chartAcIn"></canvas></div>
-  <div class="chart-panel"><h3>DC Output (W)</h3><canvas id="chartDcOut"></canvas></div>
-  <div class="chart-panel"><h3>USB Power Out (W)</h3><canvas id="chartUsb"></canvas></div>
-  <div class="chart-panel"><h3>Temperature (°C)</h3><canvas id="chartTemp"></canvas></div>
-  <div class="chart-panel chart-panel--gauge"><h3>Battery Health (%)</h3><canvas id="chartBatteryHealth"></canvas></div>
+<section class="charts" id="charts">
+  <div class="chart-panel" draggable="true" data-id="chart-battery"><h3>Battery %</h3><canvas id="chartBattery"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-solar"><h3>Solar Power (W)</h3><canvas id="chartSolar"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-acout"><h3>AC Output (W)</h3><canvas id="chartAcOut"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-acin"><h3>AC Input (W)</h3><canvas id="chartAcIn"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-dcout"><h3>DC Output (W)</h3><canvas id="chartDcOut"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-usb"><h3>USB Power Out (W)</h3><canvas id="chartUsb"></canvas></div>
+  <div class="chart-panel" draggable="true" data-id="chart-temp"><h3>Temperature (°C)</h3><canvas id="chartTemp"></canvas></div>
+  <div class="chart-panel chart-panel--gauge" draggable="true" data-id="chart-health"><h3>Battery Health (%)</h3><canvas id="chartBatteryHealth"></canvas></div>
 </section>
 
 <footer>Auto-refreshes every 30s · <span id="lastUpdate">—</span></footer>
@@ -354,8 +360,83 @@
     refreshCharts();
     setInterval(refreshStatus, 30000);
     setInterval(refreshCharts, 60000);
+    makeDraggable("cards", "solix-cards-order");
+    makeDraggable("charts", "solix-charts-order");
   });
 })();
+
+  // ---- Drag-and-drop panel reordering ----
+  function makeDraggable(containerId, storageKey) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    let dragSrc = null;
+
+    function saveOrder() {
+      const ids = Array.from(container.children).map(el => el.dataset.id);
+      localStorage.setItem(storageKey, JSON.stringify(ids));
+    }
+
+    function restoreOrder() {
+      const saved = localStorage.getItem(storageKey);
+      if (!saved) return;
+      try {
+        const ids = JSON.parse(saved);
+        ids.forEach(id => {
+          const el = container.querySelector('[data-id="' + CSS.escape(id) + '"]');
+          if (el) container.appendChild(el);
+        });
+      } catch (e) { /* ignore corrupt storage */ }
+    }
+
+    container.addEventListener("dragstart", e => {
+      dragSrc = e.target.closest("[data-id]");
+      if (!dragSrc) return;
+      dragSrc.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragSrc.dataset.id);
+    });
+
+    container.addEventListener("dragend", () => {
+      if (dragSrc) dragSrc.classList.remove("dragging");
+      container.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
+      dragSrc = null;
+    });
+
+    container.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const target = e.target.closest("[data-id]");
+      if (!target || target === dragSrc) return;
+      container.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
+      target.classList.add("drag-over");
+    });
+
+    container.addEventListener("dragleave", e => {
+      const target = e.target.closest("[data-id]");
+      if (target) target.classList.remove("drag-over");
+    });
+
+    container.addEventListener("drop", e => {
+      e.preventDefault();
+      const target = e.target.closest("[data-id]");
+      if (!target || !dragSrc || target === dragSrc) return;
+      target.classList.remove("drag-over");
+      // Insert dragSrc before or after target based on pointer position
+      const rect = target.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      if (after) {
+        container.insertBefore(dragSrc, target.nextSibling);
+      } else {
+        container.insertBefore(dragSrc, target);
+      }
+      saveOrder();
+    });
+
+    restoreOrder();
+  }
+
+  // ---- End drag-and-drop ----
 </script>
 </body>
 </html>
