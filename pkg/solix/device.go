@@ -76,14 +76,17 @@ type StateChangeCallback func(status DeviceStatus)
 // Device represents an active connection to a Solix power station.
 // All methods are safe for concurrent use.
 type Device struct {
-	mu          sync.RWMutex
-	addr        string
-	name        string
-	model       models.DeviceModel
-	status      *DeviceStatus
-	callbacks   []StateChangeCallback
-	cancelConn  context.CancelFunc
+	mu           sync.RWMutex
+	addr         string
+	name         string
+	model        models.DeviceModel
+	status       *DeviceStatus
+	callbacks    []StateChangeCallback
+	cancelConn   context.CancelFunc
 	disconnected chan struct{}
+	// sendCmd is set by the protocol path (encrypted only) and is nil when
+	// command sending is not supported by the connection.
+	sendCmd func(cmd, payload []byte) error
 }
 
 func newDevice(addr, name string, model models.DeviceModel) *Device {
@@ -171,4 +174,21 @@ func (d *Device) markDisconnected() {
 	default:
 		close(d.disconnected)
 	}
+}
+
+// SendCommand sends a raw control command to the device.
+//
+// cmd must be 2 bytes (e.g. from protocol.CmdACOutput decoded with hex.DecodeString).
+// payload should be constructed with the protocol.BuildPayload* helpers.
+//
+// Returns ErrUnsupportedDevice if the device was connected via the unencrypted
+// F2000 legacy protocol, which does not support command sending.
+func (d *Device) SendCommand(_ context.Context, cmd, payload []byte) error {
+	d.mu.RLock()
+	fn := d.sendCmd
+	d.mu.RUnlock()
+	if fn == nil {
+		return ErrUnsupportedDevice
+	}
+	return fn(cmd, payload)
 }

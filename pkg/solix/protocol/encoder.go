@@ -5,7 +5,35 @@ import (
 	"fmt"
 )
 
-// Checksum calculates the single XOR byte checksum over all bytes in packet.
+// BuildPayloadOnOff returns the TLV payload for a binary on/off command.
+//
+// On:  a1 01 21 a2 02 01 01
+// Off: a1 01 21 a2 02 01 00
+func BuildPayloadOnOff(on bool) []byte {
+	v := byte(0x00)
+	if on {
+		v = 0x01
+	}
+	return BuildPayloadLevel(v)
+}
+
+// BuildPayloadLevel returns the TLV payload for a brightness or mode level
+// command (e.g. display brightness 0–3, LED mode 0–4).
+//
+// a1 01 21 a2 02 01 <level>
+func BuildPayloadLevel(level byte) []byte {
+	return []byte{0xa1, 0x01, 0x21, 0xa2, 0x02, 0x01, level}
+}
+
+// BuildPayloadUint16 returns the TLV payload carrying a 16-bit little-endian
+// value. Used for timeout and AC charging power commands.
+//
+// a1 01 21 a2 03 02 <lo> <hi>
+func BuildPayloadUint16(value uint16) []byte {
+	return []byte{0xa1, 0x01, 0x21, 0xa2, 0x03, 0x02, byte(value), byte(value >> 8)}
+}
+
+
 // The checksum byte is appended to the end of the packet.
 func Checksum(packet []byte) byte {
 	var v byte
