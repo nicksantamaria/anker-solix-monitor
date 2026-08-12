@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.1.0...v1.2.0) (2026-08-12)
+
+
+### Features
+
+* add drag-and-drop panel reordering with localStorage persistence ([#13](https://github.com/nicksantamaria/anker-solix-monitor/issues/13)) ([829bd49](https://github.com/nicksantamaria/anker-solix-monitor/commit/829bd49ea192de05c481fcef6119872025b2109f))
+
+
+### Bug Fixes
+
+* cancel stale in-flight chart fetches with AbortController ([#15](https://github.com/nicksantamaria/anker-solix-monitor/issues/15)) ([847487e](https://github.com/nicksantamaria/anker-solix-monitor/commit/847487eb25ab4ea043fc1ed00cb1e47c9889d73a))
+
 ## [1.1.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.0.1...v1.1.0) (2026-08-12)
 
 
