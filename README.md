@@ -111,6 +111,7 @@ Open `http://<pi-ip>:8080` in a browser (e.g. on your iPad).
 The dashboard:
 - Refreshes current status every 30 seconds automatically
 - Shows battery %, solar input, AC input/output, DC output, temperature
+- Shows estimated time remaining based on last 5-minute discharge trend
 - Displays historical charts for 1h / 6h / 24h / 7d ranges
 - Clearly indicates when BLE communication has been lost
 

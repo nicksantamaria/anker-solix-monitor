@@ -108,6 +108,7 @@
   <div class="card" draggable="true" data-id="card-acout"><div class="label">AC Out</div><div class="value" id="acOut">—<span class="unit">W</span></div></div>
   <div class="card" draggable="true" data-id="card-dcout"><div class="label">DC Out</div><div class="value" id="dcOut">—<span class="unit">W</span></div></div>
   <div class="card" draggable="true" data-id="card-temp"><div class="label">Temperature</div><div class="value" id="temp">—<span class="unit">°C</span></div></div>
+  <div class="card" draggable="true" data-id="card-est-remaining"><div class="label">Est. Time Remaining</div><div class="value" id="estRemaining">—</div></div>
 </section>
 
 <div class="controls" id="rangeControls">
@@ -139,6 +140,73 @@
 
   function fmt(v, dash = "—") {
     return (v === null || v === undefined) ? dash : v;
+  }
+
+  function fmtDurationHours(hours) {
+    if (!Number.isFinite(hours) || hours <= 0) return "—";
+    const minsTotal = Math.round(hours * 60);
+    if (minsTotal < 60) return minsTotal + "m";
+    const h = Math.floor(minsTotal / 60);
+    const m = minsTotal % 60;
+    return m === 0 ? (h + "h") : (h + "h " + m + "m");
+  }
+
+  function updateEstimatedTimeRemaining(rows) {
+    const el = document.getElementById("estRemaining");
+    if (!el) return;
+    if (!Array.isArray(rows) || rows.length < 2) {
+      el.textContent = "—";
+      return;
+    }
+
+    const points = rows.map(r => {
+      return { row: r, tsMs: new Date(r.timestamp).getTime() };
+    }).filter(entry => Number.isFinite(entry.tsMs) && entry.row.battery_percent != null);
+    if (points.length < 2) {
+      el.textContent = "—";
+      return;
+    }
+
+    const latestTsMs = Math.max(...points.map(entry => entry.tsMs));
+    const windowStartMs = latestTsMs - (5 * 60 * 1000);
+    const recent = points.filter(entry => entry.tsMs >= windowStartMs)
+      .sort((a, b) => a.tsMs - b.tsMs);
+    if (recent.length < 2) {
+      el.textContent = "—";
+      return;
+    }
+
+    const oldestPoint = recent[0];
+    const newestPoint = recent[recent.length - 1];
+    const elapsedMs = newestPoint.tsMs - oldestPoint.tsMs;
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+      el.textContent = "—";
+      return;
+    }
+
+    const dischargePct = oldestPoint.row.battery_percent - newestPoint.row.battery_percent;
+    if (!Number.isFinite(dischargePct)) {
+      el.textContent = "—";
+      return;
+    }
+    if (dischargePct < -0.1) {
+      el.textContent = "Charging";
+      return;
+    }
+    if (dischargePct <= 0.1) {
+      el.textContent = "—";
+      return;
+    }
+
+    const dischargeRatePctPerHour = dischargePct / (elapsedMs / (60 * 60 * 1000));
+    if (!Number.isFinite(dischargeRatePctPerHour) || dischargeRatePctPerHour <= 0) {
+      el.textContent = "—";
+      return;
+    }
+
+    const remainingHours = newestPoint.row.battery_percent / dischargeRatePctPerHour;
+    const display = fmtDurationHours(remainingHours);
+    el.textContent = display;
   }
 
   async function fetchJSON(url) {
@@ -330,6 +398,7 @@
       charts.usb.data.datasets[3].data = rows.map(r => r.usbc2_power_w || 0);
       charts.usb.data.datasets[4].data = rows.map(r => r.usbc3_power_w || 0);
       charts.usb.update();
+      updateEstimatedTimeRemaining(rows);
     } catch (e) {
       if (e.name !== "AbortError") console.error("charts", e);
     }
