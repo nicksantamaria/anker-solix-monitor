@@ -279,6 +279,18 @@ func (c *Client) connectF2000(ctx context.Context, conn ble.Client, profile *ble
 		dev.updateStatus(f2000StatusToDeviceStatus(status))
 	}
 
+	// refreshFn re-sends the telemetry query so the device emits a fresh
+	// notification; the response arrives via the subscription callback above.
+	dev.refreshFn = func(ctx context.Context) error {
+		c.cfg.Logger.Debug("F2000 re-querying telemetry", "addr", addr)
+		if err := conn.WriteCharacteristic(writeChar, f2000TelemetryQuery, true); err != nil {
+			if err := conn.WriteCharacteristic(writeChar, f2000TelemetryQuery, false); err != nil {
+				return fmt.Errorf("solix: F2000 refresh query on %s: %w", addr, err)
+			}
+		}
+		return nil
+	}
+
 	if err := conn.Subscribe(notifyChar, false, f.onNotification); err != nil {
 		devCancel()
 		_ = conn.CancelConnection()
