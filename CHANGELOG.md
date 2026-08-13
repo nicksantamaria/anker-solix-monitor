@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.0...v1.2.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* F2000 periodic re-query and add poll log messages ([#19](https://github.com/nicksantamaria/anker-solix-monitor/issues/19)) ([4a37154](https://github.com/nicksantamaria/anker-solix-monitor/commit/4a37154412aefcea970b85e67ddf191ff2a4e616))
+
 ## [1.2.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.1.0...v1.2.0) (2026-08-12)
 
 
