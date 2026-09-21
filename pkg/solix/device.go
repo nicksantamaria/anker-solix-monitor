@@ -2,6 +2,7 @@ package solix
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -198,14 +199,15 @@ func (d *Device) markDisconnected() {
 // cmd must be 2 bytes (e.g. from protocol.CmdACOutput decoded with hex.DecodeString).
 // payload should be constructed with the protocol.BuildPayload* helpers.
 //
-// Returns ErrUnsupportedDevice if the device was connected via the unencrypted
-// F2000 legacy protocol, which does not support command sending.
+// Returns ErrUnsupportedCommand if the device was connected via a protocol path
+// that does not support command sending.
 func (d *Device) SendCommand(_ context.Context, cmd, payload []byte) error {
 	d.mu.RLock()
 	fn := d.sendCmd
+	model := d.model
 	d.mu.RUnlock()
 	if fn == nil {
-		return ErrUnsupportedDevice
+		return fmt.Errorf("%w (model=%s)", ErrUnsupportedCommand, model)
 	}
 	return fn(cmd, payload)
 }

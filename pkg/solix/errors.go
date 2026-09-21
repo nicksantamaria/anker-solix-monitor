@@ -17,6 +17,10 @@ var ErrNoData = errors.New("solix: no telemetry data available yet")
 // Solix model.
 var ErrUnsupportedDevice = errors.New("solix: unsupported device model")
 
+// ErrUnsupportedCommand is returned when command sending is not available for
+// the connected device protocol path/firmware.
+var ErrUnsupportedCommand = errors.New("solix: command sending is not supported for this device")
+
 // ErrNegotiationTimeout is returned when the ECDH negotiation does not
 // complete within the allowed time.
 var ErrNegotiationTimeout = errors.New("solix: negotiation timed out")
