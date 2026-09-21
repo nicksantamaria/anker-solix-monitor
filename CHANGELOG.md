@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.5.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.4.1...v1.5.0) (2026-09-21)
+
+
+### Features
+
+* add BLE command sending and solix-cli set subcommands ([#17](https://github.com/nicksantamaria/anker-solix-monitor/issues/17)) ([1f3c962](https://github.com/nicksantamaria/anker-solix-monitor/commit/1f3c962a3f132e52b6b7f0e098f27eea3077d659))
+* **api:** add generated apple touch icon asset ([#34](https://github.com/nicksantamaria/anker-solix-monitor/issues/34)) ([b6d8886](https://github.com/nicksantamaria/anker-solix-monitor/commit/b6d888691d8719c5ba13d40db8e830b6f049203c))
+
+
+### Bug Fixes
+
+* **api:** use 4-card grid on iPad landscape ([#32](https://github.com/nicksantamaria/anker-solix-monitor/issues/32)) ([be384c9](https://github.com/nicksantamaria/anker-solix-monitor/commit/be384c9986c0f70b8652a8d94c52158382132e3b))
+
+
+### Performance Improvements
+
+* **api:** remove low-value dashboard charts and slow UI polling to 5m ([#31](https://github.com/nicksantamaria/anker-solix-monitor/issues/31)) ([ee9a4ee](https://github.com/nicksantamaria/anker-solix-monitor/commit/ee9a4ee96e2d784c5e9269184a17541ef5f0543e))
+
 ## [1.4.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.4.0...v1.4.1) (2026-09-21)
 
 
