@@ -194,7 +194,43 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := json.Marshal(row)
+	type statusResponse struct {
+		ID                 int64     `json:"id"`
+		Timestamp          time.Time `json:"timestamp"`
+		DeviceAddr         string    `json:"device_addr"`
+		BatteryPercent     int       `json:"battery_percent"`
+		BatteryPercentExp  int       `json:"battery_percent_exp"`
+		SolarPowerW        int       `json:"solar_power_w"`
+		ACPowerInW         int       `json:"ac_power_in_w"`
+		ACPowerOutW        int       `json:"ac_power_out_w"`
+		ACToBatteryW       int       `json:"ac_to_battery_w"`
+		ACOutSocketsW      int       `json:"ac_out_sockets_w"`
+		DC1PowerOutW       int       `json:"dc1_power_out_w"`
+		DC2PowerOutW       int       `json:"dc2_power_out_w"`
+		TemperatureC       int       `json:"temperature_c"`
+		TimeRemainingHours float64   `json:"time_remaining_hours"`
+		SerialNumber       string    `json:"serial_number"`
+		SoftwareVersion    string    `json:"software_version"`
+	}
+
+	payload, err := json.Marshal(statusResponse{
+		ID:                 row.ID,
+		Timestamp:          row.Timestamp,
+		DeviceAddr:         row.DeviceAddr,
+		BatteryPercent:     row.BatteryPercent,
+		BatteryPercentExp:  row.BatteryPercentExp,
+		SolarPowerW:        row.SolarPowerW,
+		ACPowerInW:         row.ACPowerInW,
+		ACPowerOutW:        row.ACPowerOutW,
+		ACToBatteryW:       row.ACToBatteryW,
+		ACOutSocketsW:      row.ACOutSocketsW,
+		DC1PowerOutW:       row.DC1PowerOutW,
+		DC2PowerOutW:       row.DC2PowerOutW,
+		TemperatureC:       row.TemperatureC,
+		TimeRemainingHours: row.TimeRemainingHours,
+		SerialNumber:       row.SerialNumber,
+		SoftwareVersion:    row.SoftwareVersion,
+	})
 	if err != nil {
 		s.log.Error("status: marshal", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encode status"})
@@ -240,11 +276,6 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		ACPowerOutW    int       `json:"ac_power_out_w"`
 		DC1PowerOutW   int       `json:"dc1_power_out_w"`
 		DC2PowerOutW   int       `json:"dc2_power_out_w"`
-		USBC1PowerW    int       `json:"usbc1_power_w"`
-		USBC2PowerW    int       `json:"usbc2_power_w"`
-		USBC3PowerW    int       `json:"usbc3_power_w"`
-		USBA1PowerW    int       `json:"usba1_power_w"`
-		USBA2PowerW    int       `json:"usba2_power_w"`
 		TemperatureC   int       `json:"temperature_c"`
 	}
 	points := make([]historyPoint, 0, len(rows))
@@ -257,11 +288,6 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			ACPowerOutW:    row.ACPowerOutW,
 			DC1PowerOutW:   row.DC1PowerOutW,
 			DC2PowerOutW:   row.DC2PowerOutW,
-			USBC1PowerW:    row.USBC1PowerW,
-			USBC2PowerW:    row.USBC2PowerW,
-			USBC3PowerW:    row.USBC3PowerW,
-			USBA1PowerW:    row.USBA1PowerW,
-			USBA2PowerW:    row.USBA2PowerW,
 			TemperatureC:   row.TemperatureC,
 		})
 	}
