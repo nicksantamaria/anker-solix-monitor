@@ -79,6 +79,7 @@
   }
   .controls button.active { background: var(--blue); color: #0f1419; border-color: var(--blue); font-weight: 600; }
   .charts { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 768px) and (orientation: landscape) { .charts { grid-template-columns: 1fr 1fr; } }
   @media (min-width: 900px) { .charts { grid-template-columns: 1fr 1fr; } }
   .chart-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
   .chart-panel h3 { margin: 0 0 10px; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
