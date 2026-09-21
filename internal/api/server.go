@@ -114,6 +114,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/apple-touch-icon.png", s.handleAppleTouchIcon)
 	mux.HandleFunc("/", s.handleIndex)
 	return mux
 }
@@ -371,5 +372,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleAppleTouchIcon(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/apple-touch-icon.png" {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := fs.ReadFile(webFS, "web/apple-touch-icon.png")
+	if err != nil {
+		http.Error(w, "icon unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
 	_, _ = w.Write(data)
 }
