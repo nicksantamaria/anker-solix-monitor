@@ -108,7 +108,7 @@ func TestHistory(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
-	base := time.Now().UTC().Truncate(time.Second)
+	base := time.Now().UTC().Truncate(time.Minute)
 	for i := 0; i < 5; i++ {
 		s := sampleStatus(base.Add(time.Duration(i) * time.Minute))
 		s.BatteryPercent = 10 * i
@@ -151,6 +151,31 @@ func TestHistory(t *testing.T) {
 	}
 	if len(recent) != 2 {
 		t.Fatalf("expected 2 recent rows, got %d", len(recent))
+	}
+}
+
+func TestHistoryBucketed(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Second)
+	for i := 0; i < 120; i++ {
+		s := sampleStatus(base.Add(time.Duration(i) * time.Second))
+		s.BatteryPercent = i % 100
+		if err := db.Insert(ctx, testAddr, s); err != nil {
+			t.Fatalf("Insert %d: %v", i, err)
+		}
+	}
+
+	rows, err := db.HistoryBucketed(ctx, testAddr, base.Add(-time.Minute), 60, 10)
+	if err != nil {
+		t.Fatalf("HistoryBucketed: %v", err)
+	}
+	if len(rows) < 2 || len(rows) > 3 {
+		t.Fatalf("expected 2-3 bucketed rows, got %d", len(rows))
+	}
+	if rows[0].Timestamp.After(rows[1].Timestamp) {
+		t.Fatalf("expected ascending timestamps, got %v then %v", rows[0].Timestamp, rows[1].Timestamp)
 	}
 }
 

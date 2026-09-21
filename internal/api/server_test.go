@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,13 +14,16 @@ import (
 )
 
 type mockStore struct {
-	latest       *database.TelemetryRow
-	latestErr    error
-	history      []database.TelemetryRow
-	histErr      error
-	pingErr      error
-	latestCalls  int
-	historyCalls int
+	latest             *database.TelemetryRow
+	latestErr          error
+	history            []database.TelemetryRow
+	histErr            error
+	pingErr            error
+	latestCalls        int
+	historyCalls       int
+	historyBucketCalls int
+	lastBucketSeconds  int
+	lastBucketLimit    int
 }
 
 func (m *mockStore) Latest(_ context.Context, _ string) (*database.TelemetryRow, error) {
@@ -29,6 +33,13 @@ func (m *mockStore) Latest(_ context.Context, _ string) (*database.TelemetryRow,
 
 func (m *mockStore) History(_ context.Context, _ string, _ time.Time, _ int) ([]database.TelemetryRow, error) {
 	m.historyCalls++
+	return m.history, m.histErr
+}
+
+func (m *mockStore) HistoryBucketed(_ context.Context, _ string, _ time.Time, bucketSeconds int, limit int) ([]database.TelemetryRow, error) {
+	m.historyBucketCalls++
+	m.lastBucketSeconds = bucketSeconds
+	m.lastBucketLimit = limit
 	return m.history, m.histErr
 }
 
@@ -165,8 +176,17 @@ func TestHistoryEndpoint(t *testing.T) {
 	// Repeat request should hit cache instead of store.
 	recCached := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(recCached, httptest.NewRequest(http.MethodGet, "/api/history?hours=6", nil))
-	if store.historyCalls != 1 {
-		t.Fatalf("expected history store to be called once, got %d", store.historyCalls)
+	if store.historyBucketCalls != 1 {
+		t.Fatalf("expected history bucket store to be called once, got %d", store.historyBucketCalls)
+	}
+	if store.historyCalls != 0 {
+		t.Fatalf("expected non-bucket history store to not be called, got %d", store.historyCalls)
+	}
+	if store.lastBucketSeconds != 60 {
+		t.Fatalf("expected 60s buckets for 6h history, got %d", store.lastBucketSeconds)
+	}
+	if store.lastBucketLimit != 360 {
+		t.Fatalf("expected 360 point limit for 6h history, got %d", store.lastBucketLimit)
 	}
 
 	// Conditional request should return 304.
@@ -179,6 +199,31 @@ func TestHistoryEndpoint(t *testing.T) {
 	}
 	if rec304.Body.Len() != 0 {
 		t.Fatalf("expected empty 304 body, got %q", rec304.Body.String())
+	}
+}
+
+func TestHistorySampling(t *testing.T) {
+	cases := []struct {
+		hours          int
+		wantBucketSecs int
+		wantPoints     int
+	}{
+		{hours: 1, wantBucketSecs: 30, wantPoints: 120},
+		{hours: 6, wantBucketSecs: 60, wantPoints: 360},
+		{hours: 24, wantBucketSecs: 60, wantPoints: 1440},
+		{hours: 168, wantBucketSecs: 420, wantPoints: 1440},
+	}
+
+	for _, tc := range cases {
+		t.Run(strconv.Itoa(tc.hours), func(t *testing.T) {
+			gotBucketSecs, gotPoints := historySampling(tc.hours)
+			if gotBucketSecs != tc.wantBucketSecs {
+				t.Fatalf("bucket seconds: got %d want %d", gotBucketSecs, tc.wantBucketSecs)
+			}
+			if gotPoints != tc.wantPoints {
+				t.Fatalf("points: got %d want %d", gotPoints, tc.wantPoints)
+			}
+		})
 	}
 }
 

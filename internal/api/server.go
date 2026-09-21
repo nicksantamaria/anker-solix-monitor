@@ -22,6 +22,7 @@ import (
 type Store interface {
 	Latest(ctx context.Context, deviceAddr string) (*database.TelemetryRow, error)
 	History(ctx context.Context, deviceAddr string, since time.Time, limit int) ([]database.TelemetryRow, error)
+	HistoryBucketed(ctx context.Context, deviceAddr string, since time.Time, bucketSeconds int, limit int) ([]database.TelemetryRow, error)
 	Ping(ctx context.Context) error
 }
 
@@ -223,7 +224,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
-	rows, err := s.store.History(r.Context(), s.cfg.DeviceAddr, since, 10000)
+	bucketSeconds, pointLimit := historySampling(hours)
+	rows, err := s.store.HistoryBucketed(r.Context(), s.cfg.DeviceAddr, since, bucketSeconds, pointLimit)
 	if err != nil {
 		s.log.Error("history", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load history"})
@@ -274,6 +276,32 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	etag := etagFor(payload)
 	cache.set(now, s.cacheTTL, payload, etag)
 	writeCachedJSON(w, r, payload, etag, s.cacheTTL)
+}
+
+func historySampling(hours int) (bucketSeconds int, pointLimit int) {
+	const (
+		minPoints = 120
+		maxPoints = 1440
+	)
+
+	points := hours * 60
+	if points < minPoints {
+		points = minPoints
+	}
+	if points > maxPoints {
+		points = maxPoints
+	}
+
+	windowSeconds := hours * 60 * 60
+	bucket := windowSeconds / points
+	if windowSeconds%points != 0 {
+		bucket++
+	}
+	if bucket < 1 {
+		bucket = 1
+	}
+
+	return bucket, points
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
