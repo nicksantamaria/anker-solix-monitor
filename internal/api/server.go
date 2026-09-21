@@ -4,12 +4,15 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nicksantamaria/anker-solix-monitor/internal/database"
@@ -43,6 +46,9 @@ type Server struct {
 	log       *slog.Logger
 	startedAt time.Time
 	handler   http.Handler
+	cacheTTL  time.Duration
+	statusC   responseCache
+	historyC  historyCache
 }
 
 // New creates a Server.
@@ -53,9 +59,53 @@ func New(cfg Config, store Store, mon MonitorStatus) *Server {
 		mon:       mon,
 		log:       slog.Default(),
 		startedAt: time.Now(),
+		cacheTTL:  time.Minute,
 	}
 	s.handler = s.routes()
 	return s
+}
+
+type responseCache struct {
+	mu        sync.Mutex
+	expiresAt time.Time
+	payload   []byte
+	etag      string
+}
+
+func (c *responseCache) get(now time.Time) ([]byte, string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.payload) == 0 || now.After(c.expiresAt) {
+		return nil, "", false
+	}
+	return c.payload, c.etag, true
+}
+
+func (c *responseCache) set(now time.Time, ttl time.Duration, payload []byte, etag string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.payload = payload
+	c.etag = etag
+	c.expiresAt = now.Add(ttl)
+}
+
+type historyCache struct {
+	mu    sync.Mutex
+	items map[int]*responseCache
+}
+
+func (c *historyCache) forHours(hours int) *responseCache {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.items == nil {
+		c.items = map[int]*responseCache{}
+	}
+	if item, ok := c.items[hours]; ok {
+		return item
+	}
+	item := &responseCache{}
+	c.items[hours] = item
+	return item
 }
 
 func (s *Server) routes() http.Handler {
@@ -108,7 +158,30 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func writeCachedJSON(w http.ResponseWriter, r *http.Request, payload []byte, etag string, maxAge time.Duration) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(maxAge/time.Second)))
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
+func etagFor(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return `"` + hex.EncodeToString(sum[:]) + `"`
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	if payload, etag, ok := s.statusC.get(now); ok {
+		writeCachedJSON(w, r, payload, etag, s.cacheTTL)
+		return
+	}
+
 	row, err := s.store.Latest(r.Context(), s.cfg.DeviceAddr)
 	if err != nil {
 		s.log.Error("status: latest", "error", err)
@@ -119,7 +192,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no telemetry available"})
 		return
 	}
-	writeJSON(w, http.StatusOK, row)
+
+	payload, err := json.Marshal(row)
+	if err != nil {
+		s.log.Error("status: marshal", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encode status"})
+		return
+	}
+	etag := etagFor(payload)
+	s.statusC.set(now, s.cacheTTL, payload, etag)
+	writeCachedJSON(w, r, payload, etag, s.cacheTTL)
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +215,13 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		hours = 168
 	}
 
+	now := time.Now()
+	cache := s.historyC.forHours(hours)
+	if payload, etag, ok := cache.get(now); ok {
+		writeCachedJSON(w, r, payload, etag, s.cacheTTL)
+		return
+	}
+
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 	rows, err := s.store.History(r.Context(), s.cfg.DeviceAddr, since, 10000)
 	if err != nil {
@@ -140,10 +229,51 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load history"})
 		return
 	}
-	if rows == nil {
-		rows = []database.TelemetryRow{}
+
+	type historyPoint struct {
+		Timestamp      time.Time `json:"timestamp"`
+		BatteryPercent int       `json:"battery_percent"`
+		SolarPowerW    int       `json:"solar_power_w"`
+		ACPowerInW     int       `json:"ac_power_in_w"`
+		ACPowerOutW    int       `json:"ac_power_out_w"`
+		DC1PowerOutW   int       `json:"dc1_power_out_w"`
+		DC2PowerOutW   int       `json:"dc2_power_out_w"`
+		USBC1PowerW    int       `json:"usbc1_power_w"`
+		USBC2PowerW    int       `json:"usbc2_power_w"`
+		USBC3PowerW    int       `json:"usbc3_power_w"`
+		USBA1PowerW    int       `json:"usba1_power_w"`
+		USBA2PowerW    int       `json:"usba2_power_w"`
+		TemperatureC   int       `json:"temperature_c"`
 	}
-	writeJSON(w, http.StatusOK, rows)
+	points := make([]historyPoint, 0, len(rows))
+	for _, row := range rows {
+		points = append(points, historyPoint{
+			Timestamp:      row.Timestamp,
+			BatteryPercent: row.BatteryPercent,
+			SolarPowerW:    row.SolarPowerW,
+			ACPowerInW:     row.ACPowerInW,
+			ACPowerOutW:    row.ACPowerOutW,
+			DC1PowerOutW:   row.DC1PowerOutW,
+			DC2PowerOutW:   row.DC2PowerOutW,
+			USBC1PowerW:    row.USBC1PowerW,
+			USBC2PowerW:    row.USBC2PowerW,
+			USBC3PowerW:    row.USBC3PowerW,
+			USBA1PowerW:    row.USBA1PowerW,
+			USBA2PowerW:    row.USBA2PowerW,
+			TemperatureC:   row.TemperatureC,
+		})
+	}
+
+	payload, err := json.Marshal(points)
+	if err != nil {
+		s.log.Error("history: marshal", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encode history"})
+		return
+	}
+
+	etag := etagFor(payload)
+	cache.set(now, s.cacheTTL, payload, etag)
+	writeCachedJSON(w, r, payload, etag, s.cacheTTL)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
