@@ -290,3 +290,18 @@ func TestIndexEndpoint(t *testing.T) {
 		t.Errorf("unexpected content type: %q", ct)
 	}
 }
+
+func TestAppleTouchIconEndpoint(t *testing.T) {
+	srv := newTestServer(&mockStore{}, &mockMonitor{})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apple-touch-icon.png", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("unexpected content type: %q", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("expected non-empty icon body")
+	}
+}
