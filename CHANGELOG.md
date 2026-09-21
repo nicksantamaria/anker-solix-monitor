@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.3.0...v1.4.0) (2026-09-21)
+
+
+### Features
+
+* Add Solix-themed favicon to dashboard tab ([#24](https://github.com/nicksantamaria/anker-solix-monitor/issues/24)) ([9b299d7](https://github.com/nicksantamaria/anker-solix-monitor/commit/9b299d7d4c9a6a97e01c3b15fd990e0f8c40e282))
+* Reduce /api/history payload size with server-side bucketing and restore full-range chart coverage ([#26](https://github.com/nicksantamaria/anker-solix-monitor/issues/26)) ([5f9e20a](https://github.com/nicksantamaria/anker-solix-monitor/commit/5f9e20af5808d9714f24cdd350c283c4c6e4ccde))
+
 ## [1.3.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.1...v1.3.0) (2026-09-21)
 
 
