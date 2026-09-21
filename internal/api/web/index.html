@@ -125,12 +125,10 @@
   <div class="chart-panel" draggable="true" data-id="chart-acout"><h3>AC Output (W)</h3><canvas id="chartAcOut"></canvas></div>
   <div class="chart-panel" draggable="true" data-id="chart-acin"><h3>AC Input (W)</h3><canvas id="chartAcIn"></canvas></div>
   <div class="chart-panel" draggable="true" data-id="chart-dcout"><h3>DC Output (W)</h3><canvas id="chartDcOut"></canvas></div>
-  <div class="chart-panel" draggable="true" data-id="chart-usb"><h3>USB Power Out (W)</h3><canvas id="chartUsb"></canvas></div>
   <div class="chart-panel" draggable="true" data-id="chart-temp"><h3>Temperature (°C)</h3><canvas id="chartTemp"></canvas></div>
-  <div class="chart-panel chart-panel--gauge" draggable="true" data-id="chart-health"><h3>Battery Health (%)</h3><canvas id="chartBatteryHealth"></canvas></div>
 </section>
 
-<footer>Auto-refreshes every 30s · <span id="lastUpdate">—</span></footer>
+<footer>Auto-refreshes every 5m · <span id="lastUpdate">—</span></footer>
 
 <script>
 (function () {
@@ -306,11 +304,6 @@
           document.getElementById("temp").innerHTML = fmt(status.temperature_c) + '<span class="unit">°C</span>';
           document.getElementById("lastUpdate").textContent = "Last data: " + new Date(status.timestamp).toLocaleString();
 
-          if (charts.batteryHealth) {
-            var bh = status.battery_health || 0;
-            charts.batteryHealth.data.datasets[0].data = [bh, 100 - bh];
-            charts.batteryHealth.update();
-          }
         }
 
         var connected = health ? !!health.ble_connected : false;
@@ -470,14 +463,6 @@
       charts.dcOut.data.datasets[0].data = rows.map(function (r) { return (r.dc1_power_out_w || 0) + (r.dc2_power_out_w || 0); });
       charts.dcOut.update();
 
-      // USB multi-line
-      charts.usb.data.labels = labels;
-      charts.usb.data.datasets[0].data = rows.map(function (r) { return r.usba1_power_w || 0; });
-      charts.usb.data.datasets[1].data = rows.map(function (r) { return r.usba2_power_w || 0; });
-      charts.usb.data.datasets[2].data = rows.map(function (r) { return r.usbc1_power_w || 0; });
-      charts.usb.data.datasets[3].data = rows.map(function (r) { return r.usbc2_power_w || 0; });
-      charts.usb.data.datasets[4].data = rows.map(function (r) { return r.usbc3_power_w || 0; });
-      charts.usb.update();
       updateEstimatedTimeRemaining(rows);
     })
     .catch(function (e) {
@@ -507,14 +492,6 @@
       charts.acIn = buildChart("chartAcIn", "#a371f7");
       charts.dcOut = buildChart("chartDcOut", "#f0883e");
       charts.temp = buildChart("chartTemp", "#f85149");
-      charts.usb = buildMultiChart("chartUsb", [
-        { label: "USB-A1", color: "#58a6ff" },
-        { label: "USB-A2", color: "#3fb950" },
-        { label: "USB-C1", color: "#f0883e" },
-        { label: "USB-C2", color: "#a371f7" },
-        { label: "USB-C3", color: "#ffa657" },
-      ]);
-      charts.batteryHealth = buildGauge("chartBatteryHealth");
     } else {
       var chartsContainer = document.getElementById("charts");
       if (chartsContainer) {
@@ -524,8 +501,8 @@
     initControls();
     refreshStatus();
     refreshCharts();
-    setInterval(refreshStatus, 30000);
-    setInterval(refreshCharts, 60000);
+    setInterval(refreshStatus, 300000);
+    setInterval(refreshCharts, 300000);
     makeDraggable("cards", "solix-cards-order");
     makeDraggable("charts", "solix-charts-order");
   });
