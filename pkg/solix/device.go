@@ -84,6 +84,9 @@ type Device struct {
 	callbacks    []StateChangeCallback
 	cancelConn   context.CancelFunc
 	disconnected chan struct{}
+	// sendCmd is set by the protocol path (encrypted only) and is nil when
+	// command sending is not supported by the connection.
+	sendCmd func(cmd, payload []byte) error
 	// refreshFn, if non-nil, is called by Refresh to request fresh telemetry
 	// from the device (e.g. re-send the F2000 query frame).
 	refreshFn func(ctx context.Context) error
@@ -188,4 +191,21 @@ func (d *Device) markDisconnected() {
 	default:
 		close(d.disconnected)
 	}
+}
+
+// SendCommand sends a raw control command to the device.
+//
+// cmd must be 2 bytes (e.g. from protocol.CmdACOutput decoded with hex.DecodeString).
+// payload should be constructed with the protocol.BuildPayload* helpers.
+//
+// Returns ErrUnsupportedDevice if the device was connected via the unencrypted
+// F2000 legacy protocol, which does not support command sending.
+func (d *Device) SendCommand(_ context.Context, cmd, payload []byte) error {
+	d.mu.RLock()
+	fn := d.sendCmd
+	d.mu.RUnlock()
+	if fn == nil {
+		return ErrUnsupportedDevice
+	}
+	return fn(cmd, payload)
 }
