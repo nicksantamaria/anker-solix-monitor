@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nicksantamaria/anker-solix-monitor/pkg/solix"
@@ -73,7 +74,17 @@ type TelemetryRow struct {
 // DB wraps a *sql.DB connection to the SQLite telemetry store.
 type DB struct {
 	sql *sql.DB
+
+	retentionMu      sync.Mutex
+	nextRetentionRun time.Time
 }
+
+const (
+	retentionRunInterval = time.Hour
+	rawRetention         = 24 * time.Hour
+	fiveMinuteRetention  = 7 * 24 * time.Hour
+	maxRetention         = 30 * 24 * time.Hour
+)
 
 // Open opens (creating if necessary) the SQLite database at path and applies
 // the schema.
@@ -147,6 +158,9 @@ INSERT INTO telemetry (
 	)
 	if err != nil {
 		return fmt.Errorf("database: insert telemetry: %w", err)
+	}
+	if err := db.maybeApplyRetention(ctx, time.Now()); err != nil {
+		return err
 	}
 	return nil
 }
@@ -294,4 +308,101 @@ LIMIT ?`
 		return nil, fmt.Errorf("database: history bucketed rows: %w", err)
 	}
 	return out, nil
+}
+
+func (db *DB) maybeApplyRetention(ctx context.Context, now time.Time) error {
+	now = now.UTC()
+
+	db.retentionMu.Lock()
+	defer db.retentionMu.Unlock()
+
+	if !db.nextRetentionRun.IsZero() && now.Before(db.nextRetentionRun) {
+		return nil
+	}
+	db.nextRetentionRun = now.Add(retentionRunInterval)
+
+	if err := db.applyRetention(ctx, now); err != nil {
+		return fmt.Errorf("database: apply retention: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) applyRetention(ctx context.Context, now time.Time) error {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	fiveMinuteStart := now.Add(-fiveMinuteRetention)
+	fiveMinuteEnd := now.Add(-rawRetention)
+	if err := compactWindow(ctx, tx, fiveMinuteStart, fiveMinuteEnd, 300); err != nil {
+		return fmt.Errorf("compact 5m window: %w", err)
+	}
+
+	fifteenMinuteStart := now.Add(-maxRetention)
+	fifteenMinuteEnd := now.Add(-fiveMinuteRetention)
+	if err := compactWindow(ctx, tx, fifteenMinuteStart, fifteenMinuteEnd, 900); err != nil {
+		return fmt.Errorf("compact 15m window: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM telemetry WHERE timestamp < ?`, fifteenMinuteStart.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("delete old telemetry: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+func compactWindow(ctx context.Context, tx *sql.Tx, start time.Time, end time.Time, bucketSeconds int) error {
+	const insertQ = `
+INSERT INTO telemetry (
+	timestamp, device_addr, battery_percent, battery_percent_exp, battery_health,
+	solar_power_w, ac_power_in_w, ac_power_out_w, ac_to_battery_w, ac_out_sockets_w,
+	dc1_power_out_w, dc2_power_out_w, usbc1_power_w, usbc2_power_w, usbc3_power_w,
+	usba1_power_w, usba2_power_w, temperature_c, time_remaining_hours,
+	serial_number, software_version
+)
+SELECT
+	datetime((CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_timestamp,
+	device_addr,
+	CAST(ROUND(AVG(battery_percent)) AS INTEGER) AS battery_percent,
+	CAST(ROUND(AVG(battery_percent_exp)) AS INTEGER) AS battery_percent_exp,
+	CAST(ROUND(AVG(battery_health)) AS INTEGER) AS battery_health,
+	CAST(ROUND(AVG(solar_power_w)) AS INTEGER) AS solar_power_w,
+	CAST(ROUND(AVG(ac_power_in_w)) AS INTEGER) AS ac_power_in_w,
+	CAST(ROUND(AVG(ac_power_out_w)) AS INTEGER) AS ac_power_out_w,
+	CAST(ROUND(AVG(ac_to_battery_w)) AS INTEGER) AS ac_to_battery_w,
+	CAST(ROUND(AVG(ac_out_sockets_w)) AS INTEGER) AS ac_out_sockets_w,
+	CAST(ROUND(AVG(dc1_power_out_w)) AS INTEGER) AS dc1_power_out_w,
+	CAST(ROUND(AVG(dc2_power_out_w)) AS INTEGER) AS dc2_power_out_w,
+	CAST(ROUND(AVG(usbc1_power_w)) AS INTEGER) AS usbc1_power_w,
+	CAST(ROUND(AVG(usbc2_power_w)) AS INTEGER) AS usbc2_power_w,
+	CAST(ROUND(AVG(usbc3_power_w)) AS INTEGER) AS usbc3_power_w,
+	CAST(ROUND(AVG(usba1_power_w)) AS INTEGER) AS usba1_power_w,
+	CAST(ROUND(AVG(usba2_power_w)) AS INTEGER) AS usba2_power_w,
+	CAST(ROUND(AVG(temperature_c)) AS INTEGER) AS temperature_c,
+	AVG(time_remaining_hours) AS time_remaining_hours,
+	MAX(serial_number) AS serial_number,
+	MAX(software_version) AS software_version
+FROM telemetry
+WHERE timestamp >= ? AND timestamp < ?
+GROUP BY
+	device_addr,
+	CAST(strftime('%s', timestamp) AS INTEGER) / ?`
+
+	if _, err := tx.ExecContext(ctx, insertQ,
+		bucketSeconds, bucketSeconds,
+		start.Format(time.RFC3339), end.Format(time.RFC3339),
+		bucketSeconds,
+	); err != nil {
+		return fmt.Errorf("insert compacted rows: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM telemetry WHERE timestamp >= ? AND timestamp < ?`, start.Format(time.RFC3339), end.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("delete source rows: %w", err)
+	}
+	return nil
 }

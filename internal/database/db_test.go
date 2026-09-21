@@ -199,3 +199,110 @@ func TestEmptyDatabase(t *testing.T) {
 		t.Fatalf("expected 0 rows, got %d", len(rows))
 	}
 }
+
+func TestApplyRetentionPolicy(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	db.nextRetentionRun = time.Now().Add(365 * 24 * time.Hour)
+
+	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
+
+	insertRange := func(start time.Time, minutes int) {
+		t.Helper()
+		for i := 0; i < minutes; i++ {
+			s := sampleStatus(start.Add(time.Duration(i) * time.Minute))
+			s.BatteryPercent = i % 100
+			if err := db.Insert(ctx, testAddr, s); err != nil {
+				t.Fatalf("Insert at %v: %v", s.UpdatedAt, err)
+			}
+		}
+	}
+
+	// <24h raw window: should remain unbucketed.
+	insertRange(now.Add(-2*time.Hour), 120)
+	// 1-7d window: should compact to 5-minute buckets.
+	insertRange(now.Add(-48*time.Hour), 360)
+	// 7-30d window: should compact to 15-minute buckets.
+	insertRange(now.Add(-10*24*time.Hour), 600)
+	// >30d window: should be deleted.
+	insertRange(now.Add(-40*24*time.Hour), 180)
+
+	if err := db.applyRetention(ctx, now); err != nil {
+		t.Fatalf("applyRetention: %v", err)
+	}
+
+	rawCount := countRowsInWindow(t, db, now.Add(-24*time.Hour), now)
+	if rawCount != 120 {
+		t.Fatalf("raw window count: got %d want %d", rawCount, 120)
+	}
+
+	fiveStart := now.Add(-7 * 24 * time.Hour)
+	fiveEnd := now.Add(-24 * time.Hour)
+	fiveCount := countRowsInWindow(t, db, fiveStart, fiveEnd)
+	if fiveCount != 72 {
+		t.Fatalf("5-minute window count: got %d want %d", fiveCount, 72)
+	}
+	assertBucketAligned(t, db, fiveStart, fiveEnd, 300)
+
+	fifteenStart := now.Add(-30 * 24 * time.Hour)
+	fifteenEnd := now.Add(-7 * 24 * time.Hour)
+	fifteenCount := countRowsInWindow(t, db, fifteenStart, fifteenEnd)
+	if fifteenCount != 40 {
+		t.Fatalf("15-minute window count: got %d want %d", fifteenCount, 40)
+	}
+	assertBucketAligned(t, db, fifteenStart, fifteenEnd, 900)
+
+	oldCount := countRowsBefore(t, db, now.Add(-30*24*time.Hour))
+	if oldCount != 0 {
+		t.Fatalf("expected no rows older than 30 days, got %d", oldCount)
+	}
+}
+
+func countRowsInWindow(t *testing.T, db *DB, start, end time.Time) int {
+	t.Helper()
+	var count int
+	err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM telemetry WHERE device_addr = ? AND timestamp >= ? AND timestamp < ?`,
+		testAddr,
+		start.Format(time.RFC3339),
+		end.Format(time.RFC3339),
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("countRowsInWindow: %v", err)
+	}
+	return count
+}
+
+func countRowsBefore(t *testing.T, db *DB, before time.Time) int {
+	t.Helper()
+	var count int
+	err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM telemetry WHERE device_addr = ? AND timestamp < ?`,
+		testAddr,
+		before.Format(time.RFC3339),
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("countRowsBefore: %v", err)
+	}
+	return count
+}
+
+func assertBucketAligned(t *testing.T, db *DB, start, end time.Time, bucketSeconds int) {
+	t.Helper()
+	var misaligned int
+	err := db.sql.QueryRow(
+		`SELECT COUNT(*) FROM telemetry
+		 WHERE device_addr = ? AND timestamp >= ? AND timestamp < ?
+		   AND (CAST(strftime('%s', timestamp) AS INTEGER) % ?) != 0`,
+		testAddr,
+		start.Format(time.RFC3339),
+		end.Format(time.RFC3339),
+		bucketSeconds,
+	).Scan(&misaligned)
+	if err != nil {
+		t.Fatalf("assertBucketAligned: %v", err)
+	}
+	if misaligned != 0 {
+		t.Fatalf("expected timestamps aligned to %d seconds, got %d misaligned rows", bucketSeconds, misaligned)
+	}
+}
