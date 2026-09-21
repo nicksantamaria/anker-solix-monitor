@@ -25,6 +25,7 @@ type BLEClient interface {
 
 // BLEDevice abstracts the subset of *solix.Device used by the monitor.
 type BLEDevice interface {
+	Refresh(ctx context.Context) error
 	Status(ctx context.Context) (solix.DeviceStatus, error)
 	AddCallback(fn solix.StateChangeCallback)
 	Disconnected() <-chan struct{}
@@ -187,6 +188,7 @@ func (m *Monitor) session(ctx context.Context) error {
 			m.log.Error("insert telemetry (callback)", "error", err)
 			return
 		}
+		m.log.Info("telemetry received via push", "battery_pct", status.BatteryPercent, "updated_at", status.UpdatedAt)
 		m.recordPoll()
 	})
 
@@ -209,9 +211,19 @@ func (m *Monitor) session(ctx context.Context) error {
 	}
 }
 
-// poll reads the latest status and stores it. ErrNoData is not treated as an
-// error condition (telemetry may simply not have arrived yet).
+// poll requests fresh telemetry from the device and stores any result that
+// arrives. ErrNoData is not treated as an error condition (telemetry may
+// simply not have arrived yet).
 func (m *Monitor) poll(ctx context.Context, dev BLEDevice) {
+	// Ask the device for a fresh snapshot. For push-only devices this is a
+	// no-op; for query-response devices (e.g. F2000) it sends the query frame
+	// and the response arrives asynchronously via the registered callback.
+	if err := dev.Refresh(ctx); err != nil {
+		m.log.Warn("poll refresh request failed", "error", err)
+		m.setError(err)
+		return
+	}
+
 	status, err := dev.Status(ctx)
 	if err != nil {
 		if errors.Is(err, solix.ErrNoData) {
@@ -227,5 +239,6 @@ func (m *Monitor) poll(ctx context.Context, dev BLEDevice) {
 		m.setError(err)
 		return
 	}
+	m.log.Info("poll successful", "battery_pct", status.BatteryPercent, "updated_at", status.UpdatedAt)
 	m.recordPoll()
 }

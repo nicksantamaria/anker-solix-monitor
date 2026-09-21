@@ -235,3 +235,63 @@ FROM telemetry WHERE device_addr = ? AND timestamp >= ? ORDER BY timestamp ASC, 
 	}
 	return out, nil
 }
+
+// HistoryBucketed returns telemetry rows grouped into fixed-width time buckets
+// to keep payload size bounded while covering the full requested time window.
+func (db *DB) HistoryBucketed(ctx context.Context, deviceAddr string, since time.Time, bucketSeconds int, limit int) ([]TelemetryRow, error) {
+	if bucketSeconds <= 0 {
+		bucketSeconds = 60
+	}
+	if limit <= 0 {
+		limit = 1440
+	}
+
+	const q = `
+SELECT
+	MIN(id) AS id,
+	MIN(timestamp) AS timestamp,
+	device_addr,
+	CAST(ROUND(AVG(battery_percent)) AS INTEGER) AS battery_percent,
+	CAST(ROUND(AVG(battery_percent_exp)) AS INTEGER) AS battery_percent_exp,
+	CAST(ROUND(AVG(battery_health)) AS INTEGER) AS battery_health,
+	CAST(ROUND(AVG(solar_power_w)) AS INTEGER) AS solar_power_w,
+	CAST(ROUND(AVG(ac_power_in_w)) AS INTEGER) AS ac_power_in_w,
+	CAST(ROUND(AVG(ac_power_out_w)) AS INTEGER) AS ac_power_out_w,
+	CAST(ROUND(AVG(ac_to_battery_w)) AS INTEGER) AS ac_to_battery_w,
+	CAST(ROUND(AVG(ac_out_sockets_w)) AS INTEGER) AS ac_out_sockets_w,
+	CAST(ROUND(AVG(dc1_power_out_w)) AS INTEGER) AS dc1_power_out_w,
+	CAST(ROUND(AVG(dc2_power_out_w)) AS INTEGER) AS dc2_power_out_w,
+	CAST(ROUND(AVG(usbc1_power_w)) AS INTEGER) AS usbc1_power_w,
+	CAST(ROUND(AVG(usbc2_power_w)) AS INTEGER) AS usbc2_power_w,
+	CAST(ROUND(AVG(usbc3_power_w)) AS INTEGER) AS usbc3_power_w,
+	CAST(ROUND(AVG(usba1_power_w)) AS INTEGER) AS usba1_power_w,
+	CAST(ROUND(AVG(usba2_power_w)) AS INTEGER) AS usba2_power_w,
+	CAST(ROUND(AVG(temperature_c)) AS INTEGER) AS temperature_c,
+	AVG(time_remaining_hours) AS time_remaining_hours,
+	MAX(serial_number) AS serial_number,
+	MAX(software_version) AS software_version
+FROM telemetry
+WHERE device_addr = ? AND timestamp >= ?
+GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
+ORDER BY MIN(timestamp) ASC
+LIMIT ?`
+
+	rows, err := db.sql.QueryContext(ctx, q, deviceAddr, since.UTC().Format(time.RFC3339), bucketSeconds, limit)
+	if err != nil {
+		return nil, fmt.Errorf("database: history bucketed: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TelemetryRow
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("database: history bucketed scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("database: history bucketed rows: %w", err)
+	}
+	return out, nil
+}

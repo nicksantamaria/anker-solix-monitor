@@ -51,6 +51,8 @@ func newMockDevice() *mockDevice {
 	return &mockDevice{disconnected: make(chan struct{})}
 }
 
+func (d *mockDevice) Refresh(_ context.Context) error { return nil }
+
 func (d *mockDevice) Status(_ context.Context) (solix.DeviceStatus, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

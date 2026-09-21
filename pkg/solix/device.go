@@ -87,6 +87,9 @@ type Device struct {
 	// sendCmd is set by the protocol path (encrypted only) and is nil when
 	// command sending is not supported by the connection.
 	sendCmd func(cmd, payload []byte) error
+	// refreshFn, if non-nil, is called by Refresh to request fresh telemetry
+	// from the device (e.g. re-send the F2000 query frame).
+	refreshFn func(ctx context.Context) error
 }
 
 func newDevice(addr, name string, model models.DeviceModel) *Device {
@@ -138,6 +141,20 @@ func (d *Device) Status(_ context.Context) (DeviceStatus, error) {
 		return DeviceStatus{}, ErrNoData
 	}
 	return *d.status, nil
+}
+
+// Refresh requests a fresh telemetry snapshot from the device. For devices
+// that only emit data in response to an explicit query (e.g. F2000), this
+// sends the query frame; for push-only devices it is a no-op. The response
+// arrives asynchronously via the registered callbacks.
+func (d *Device) Refresh(ctx context.Context) error {
+	d.mu.RLock()
+	fn := d.refreshFn
+	d.mu.RUnlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return nil
 }
 
 // Disconnected returns a channel that is closed when the device disconnects.

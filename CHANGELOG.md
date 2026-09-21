@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.4.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.4.0...v1.4.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **api:** improve dashboard chart compatibility for legacy browsers ([#29](https://github.com/nicksantamaria/anker-solix-monitor/issues/29)) ([7085a2d](https://github.com/nicksantamaria/anker-solix-monitor/commit/7085a2d7cc31b9acdb6611764a15a35a88b81b2d))
+
+## [1.4.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.3.0...v1.4.0) (2026-09-21)
+
+
+### Features
+
+* Add Solix-themed favicon to dashboard tab ([#24](https://github.com/nicksantamaria/anker-solix-monitor/issues/24)) ([9b299d7](https://github.com/nicksantamaria/anker-solix-monitor/commit/9b299d7d4c9a6a97e01c3b15fd990e0f8c40e282))
+* Reduce /api/history payload size with server-side bucketing and restore full-range chart coverage ([#26](https://github.com/nicksantamaria/anker-solix-monitor/issues/26)) ([5f9e20a](https://github.com/nicksantamaria/anker-solix-monitor/commit/5f9e20af5808d9714f24cdd350c283c4c6e4ccde))
+
+## [1.3.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.1...v1.3.0) (2026-09-21)
+
+
+### Features
+
+* Add 60s API caching and slim history payload for dashboard endpoints ([#23](https://github.com/nicksantamaria/anker-solix-monitor/issues/23)) ([02b4cf3](https://github.com/nicksantamaria/anker-solix-monitor/commit/02b4cf356f65c88a66164715debcf81bd4d10af5))
+
+
+### Bug Fixes
+
+* fix dashboard JavaScript compatibility for iOS 9.3.5 ([#21](https://github.com/nicksantamaria/anker-solix-monitor/issues/21)) ([ec495e7](https://github.com/nicksantamaria/anker-solix-monitor/commit/ec495e76a12eaa44cc18d21d47d6835d2e299ae4))
+
+## [1.2.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.0...v1.2.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* F2000 periodic re-query and add poll log messages ([#19](https://github.com/nicksantamaria/anker-solix-monitor/issues/19)) ([4a37154](https://github.com/nicksantamaria/anker-solix-monitor/commit/4a37154412aefcea970b85e67ddf191ff2a4e616))
+
 ## [1.2.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.1.0...v1.2.0) (2026-08-12)
 
 
