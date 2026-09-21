@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solix F2000 Monitor</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='8' y='18' width='44' height='28' rx='6' fill='%23222b36' stroke='%233fb950' stroke-width='4'/%3E%3Crect x='52' y='26' width='6' height='12' rx='2' fill='%233fb950'/%3E%3Cpath d='M30 22L20 36h9l-3 10 12-16h-9l1-8z' fill='%233fb950'/%3E%3C/svg%3E">
-<script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
 <style>
   :root {
     --bg: #0f1419;
@@ -138,6 +138,7 @@
   var rangeHours = 6;
   var charts = {};
   var chartRequestSeq = 0;
+  var chartIsV2 = false;
 
   function fmt(v, dash) {
     if (dash === undefined) dash = "—";
@@ -330,20 +331,38 @@
       });
   }
 
+  function lineChartOptions(showLegend) {
+    if (chartIsV2) {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        legend: {
+          display: !!showLegend,
+          labels: { fontColor: "#8b98a5", boxWidth: 12, fontSize: 11 }
+        },
+        scales: {
+          xAxes: [{ ticks: { fontColor: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, gridLines: { color: "#2d3743" } }],
+          yAxes: [{ ticks: { fontColor: "#8b98a5", beginAtZero: true }, gridLines: { color: "#2d3743" } }]
+        }
+      };
+    }
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: !!showLegend, labels: { color: "#8b98a5", boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, grid: { color: "#2d3743" } },
+        y: { ticks: { color: "#8b98a5" }, grid: { color: "#2d3743" }, beginAtZero: true }
+      }
+    };
+  }
+
   function buildChart(id, color) {
     var ctx = document.getElementById(id).getContext("2d");
     return new Chart(ctx, {
       type: "line",
-      data: { labels: [], datasets: [{ data: [], borderColor: color, backgroundColor: color + "33", fill: true, pointRadius: 0, borderWidth: 2, tension: 0.25 }] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, grid: { color: "#2d3743" } },
-          y: { ticks: { color: "#8b98a5" }, grid: { color: "#2d3743" }, beginAtZero: true },
-        },
-      },
+      data: { labels: [], datasets: [{ data: [], borderColor: color, backgroundColor: color + "33", fill: true, pointRadius: 0, borderWidth: 2, tension: 0.25, lineTension: 0.25 }] },
+      options: lineChartOptions(false),
     });
   }
 
@@ -362,45 +381,46 @@
             fill: false,
             pointRadius: 0,
             borderWidth: 2,
-            tension: 0.25
+            tension: 0.25,
+            lineTension: 0.25
           };
         }),
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: true, labels: { color: "#8b98a5", boxWidth: 12, font: { size: 11 } } } },
-        scales: {
-          x: { ticks: { color: "#8b98a5", maxTicksLimit: 6, autoSkip: true }, grid: { color: "#2d3743" } },
-          y: { ticks: { color: "#8b98a5" }, grid: { color: "#2d3743" }, beginAtZero: true },
-        },
-      },
+      options: lineChartOptions(true),
     });
   }
 
   function buildGauge(id) {
-    var ctx = document.getElementById(id).getContext("2d");
-    return new Chart(ctx, {
-      type: "doughnut",
-      data: {
-        datasets: [{
-          data: [0, 100],
-          backgroundColor: ["#3fb950", "#2d3743"],
-          borderWidth: 0,
-          circumference: 180,
-          rotation: 270,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: "70%",
-        plugins: {
-          legend: { display: false },
-          tooltip: { enabled: false },
-        },
-      },
-      plugins: [{
+   var ctx = document.getElementById(id).getContext("2d");
+   var gaugeCirc = chartIsV2 ? Math.PI : 180;
+   var gaugeRotation = chartIsV2 ? Math.PI : 270;
+   return new Chart(ctx, {
+     type: "doughnut",
+     data: {
+       datasets: [{
+         data: [0, 100],
+         backgroundColor: ["#3fb950", "#2d3743"],
+         borderWidth: 0,
+         circumference: gaugeCirc,
+         rotation: gaugeRotation,
+       }],
+     },
+     options: chartIsV2 ? {
+       responsive: true,
+       maintainAspectRatio: false,
+       cutoutPercentage: 70,
+       legend: { display: false },
+       tooltips: { enabled: false },
+     } : {
+       responsive: true,
+       maintainAspectRatio: false,
+       cutout: "70%",
+       plugins: {
+         legend: { display: false },
+         tooltip: { enabled: false },
+       },
+     },
+     plugins: [{
         id: "gaugeLabel",
         afterDraw: function (chart) {
           var c = chart.ctx;
@@ -479,6 +499,8 @@
 
   window.addEventListener("DOMContentLoaded", function () {
     if (typeof Chart !== "undefined") {
+      var major = parseInt((Chart.version || "2").split(".")[0], 10);
+      chartIsV2 = !isFiniteNumber(major) || major < 3;
       charts.battery = buildChart("chartBattery", "#3fb950");
       charts.solar = buildChart("chartSolar", "#f0883e");
       charts.acOut = buildChart("chartAcOut", "#58a6ff");
@@ -493,6 +515,11 @@
         { label: "USB-C3", color: "#ffa657" },
       ]);
       charts.batteryHealth = buildGauge("chartBatteryHealth");
+    } else {
+      var chartsContainer = document.getElementById("charts");
+      if (chartsContainer) {
+        chartsContainer.innerHTML = '<div class="chart-panel"><h3>Charts unavailable on this browser</h3></div>';
+      }
     }
     initControls();
     refreshStatus();
