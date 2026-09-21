@@ -357,8 +357,39 @@ func (db *DB) applyRetention(ctx context.Context, now time.Time) error {
 }
 
 func compactWindow(ctx context.Context, tx *sql.Tx, start time.Time, end time.Time, bucketSeconds int) error {
-	const insertQ = `
-INSERT INTO telemetry (
+	const createTempQ = `
+CREATE TEMP TABLE IF NOT EXISTS telemetry_compact (
+	timestamp            DATETIME NOT NULL,
+	device_addr          TEXT NOT NULL,
+	battery_percent      INTEGER,
+	battery_percent_exp  INTEGER,
+	battery_health       INTEGER,
+	solar_power_w        INTEGER,
+	ac_power_in_w        INTEGER,
+	ac_power_out_w       INTEGER,
+	ac_to_battery_w      INTEGER,
+	ac_out_sockets_w     INTEGER,
+	dc1_power_out_w      INTEGER,
+	dc2_power_out_w      INTEGER,
+	usbc1_power_w        INTEGER,
+	usbc2_power_w        INTEGER,
+	usbc3_power_w        INTEGER,
+	usba1_power_w        INTEGER,
+	usba2_power_w        INTEGER,
+	temperature_c        INTEGER,
+	time_remaining_hours REAL,
+	serial_number        TEXT,
+	software_version     TEXT
+)`
+	if _, err := tx.ExecContext(ctx, createTempQ); err != nil {
+		return fmt.Errorf("create temp table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM telemetry_compact`); err != nil {
+		return fmt.Errorf("clear temp table: %w", err)
+	}
+
+	const stageQ = `
+INSERT INTO telemetry_compact (
 	timestamp, device_addr, battery_percent, battery_percent_exp, battery_health,
 	solar_power_w, ac_power_in_w, ac_power_out_w, ac_to_battery_w, ac_out_sockets_w,
 	dc1_power_out_w, dc2_power_out_w, usbc1_power_w, usbc2_power_w, usbc3_power_w,
@@ -366,7 +397,7 @@ INSERT INTO telemetry (
 	serial_number, software_version
 )
 SELECT
-	datetime((CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_timestamp,
+	strftime('%Y-%m-%dT%H:%M:%SZ', (CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket_timestamp,
 	device_addr,
 	CAST(ROUND(AVG(battery_percent)) AS INTEGER) AS battery_percent,
 	CAST(ROUND(AVG(battery_percent_exp)) AS INTEGER) AS battery_percent_exp,
@@ -392,17 +423,33 @@ WHERE timestamp >= ? AND timestamp < ?
 GROUP BY
 	device_addr,
 	CAST(strftime('%s', timestamp) AS INTEGER) / ?`
-
-	if _, err := tx.ExecContext(ctx, insertQ,
+	if _, err := tx.ExecContext(ctx, stageQ,
 		bucketSeconds, bucketSeconds,
 		start.Format(time.RFC3339), end.Format(time.RFC3339),
 		bucketSeconds,
 	); err != nil {
-		return fmt.Errorf("insert compacted rows: %w", err)
+		return fmt.Errorf("stage compacted rows: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM telemetry WHERE timestamp >= ? AND timestamp < ?`, start.Format(time.RFC3339), end.Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("delete source rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO telemetry (
+	timestamp, device_addr, battery_percent, battery_percent_exp, battery_health,
+	solar_power_w, ac_power_in_w, ac_power_out_w, ac_to_battery_w, ac_out_sockets_w,
+	dc1_power_out_w, dc2_power_out_w, usbc1_power_w, usbc2_power_w, usbc3_power_w,
+	usba1_power_w, usba2_power_w, temperature_c, time_remaining_hours,
+	serial_number, software_version
+)
+SELECT
+	timestamp, device_addr, battery_percent, battery_percent_exp, battery_health,
+	solar_power_w, ac_power_in_w, ac_power_out_w, ac_to_battery_w, ac_out_sockets_w,
+	dc1_power_out_w, dc2_power_out_w, usbc1_power_w, usbc2_power_w, usbc3_power_w,
+	usba1_power_w, usba2_power_w, temperature_c, time_remaining_hours,
+	serial_number, software_version
+FROM telemetry_compact`); err != nil {
+		return fmt.Errorf("insert compacted rows: %w", err)
 	}
 	return nil
 }
