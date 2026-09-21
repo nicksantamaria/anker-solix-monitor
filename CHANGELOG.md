@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.4.0...v1.4.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **api:** improve dashboard chart compatibility for legacy browsers ([#29](https://github.com/nicksantamaria/anker-solix-monitor/issues/29)) ([7085a2d](https://github.com/nicksantamaria/anker-solix-monitor/commit/7085a2d7cc31b9acdb6611764a15a35a88b81b2d))
+
 ## [1.4.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.3.0...v1.4.0) (2026-09-21)
 
 
