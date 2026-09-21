@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.1...v1.3.0) (2026-09-21)
+
+
+### Features
+
+* Add 60s API caching and slim history payload for dashboard endpoints ([#23](https://github.com/nicksantamaria/anker-solix-monitor/issues/23)) ([02b4cf3](https://github.com/nicksantamaria/anker-solix-monitor/commit/02b4cf356f65c88a66164715debcf81bd4d10af5))
+
+
+### Bug Fixes
+
+* fix dashboard JavaScript compatibility for iOS 9.3.5 ([#21](https://github.com/nicksantamaria/anker-solix-monitor/issues/21)) ([ec495e7](https://github.com/nicksantamaria/anker-solix-monitor/commit/ec495e76a12eaa44cc18d21d47d6835d2e299ae4))
+
 ## [1.2.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.2.0...v1.2.1) (2026-08-13)
 
 
