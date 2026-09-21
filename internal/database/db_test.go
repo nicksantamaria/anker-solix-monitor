@@ -306,3 +306,26 @@ func assertBucketAligned(t *testing.T, db *DB, start, end time.Time, bucketSecon
 		t.Fatalf("expected timestamps aligned to %d seconds, got %d misaligned rows", bucketSeconds, misaligned)
 	}
 }
+
+func TestShouldVacuum(t *testing.T) {
+	cases := []struct {
+		name      string
+		pageCount int64
+		freePages int64
+		want      bool
+	}{
+		{name: "zero pages", pageCount: 0, freePages: 2000, want: false},
+		{name: "below free page threshold", pageCount: 10000, freePages: minVacuumFreePages - 1, want: false},
+		{name: "below free ratio threshold", pageCount: 10000, freePages: 1500, want: false},
+		{name: "meets both thresholds", pageCount: 5000, freePages: 1500, want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldVacuum(tc.pageCount, tc.freePages)
+			if got != tc.want {
+				t.Fatalf("shouldVacuum(%d, %d) = %v, want %v", tc.pageCount, tc.freePages, got, tc.want)
+			}
+		})
+	}
+}

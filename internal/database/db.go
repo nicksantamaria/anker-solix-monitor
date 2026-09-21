@@ -77,6 +77,7 @@ type DB struct {
 
 	retentionMu      sync.Mutex
 	nextRetentionRun time.Time
+	nextVacuumRun    time.Time
 }
 
 const (
@@ -84,6 +85,9 @@ const (
 	rawRetention         = 24 * time.Hour
 	fiveMinuteRetention  = 7 * 24 * time.Hour
 	maxRetention         = 30 * 24 * time.Hour
+	vacuumRunInterval    = 24 * time.Hour
+	minVacuumFreePages   = 1024
+	minVacuumFreeRatio   = 0.20
 )
 
 // Open opens (creating if necessary) the SQLite database at path and applies
@@ -324,6 +328,9 @@ func (db *DB) maybeApplyRetention(ctx context.Context, now time.Time) error {
 	if err := db.applyRetention(ctx, now); err != nil {
 		return fmt.Errorf("database: apply retention: %w", err)
 	}
+	if err := db.maybeVacuum(ctx, now); err != nil {
+		return fmt.Errorf("database: maybe vacuum: %w", err)
+	}
 	return nil
 }
 
@@ -452,4 +459,42 @@ FROM telemetry_compact`); err != nil {
 		return fmt.Errorf("insert compacted rows: %w", err)
 	}
 	return nil
+}
+
+func (db *DB) maybeVacuum(ctx context.Context, now time.Time) error {
+	if !db.nextVacuumRun.IsZero() && now.Before(db.nextVacuumRun) {
+		return nil
+	}
+
+	pageCount, freePages, err := db.pageStats(ctx)
+	if err != nil {
+		return err
+	}
+	if !shouldVacuum(pageCount, freePages) {
+		db.nextVacuumRun = now.Add(vacuumRunInterval)
+		return nil
+	}
+
+	if _, err := db.sql.ExecContext(ctx, `VACUUM`); err != nil {
+		return fmt.Errorf("vacuum: %w", err)
+	}
+	db.nextVacuumRun = now.Add(vacuumRunInterval)
+	return nil
+}
+
+func (db *DB) pageStats(ctx context.Context) (pageCount int64, freePages int64, err error) {
+	if err := db.sql.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
+		return 0, 0, fmt.Errorf("page_count pragma: %w", err)
+	}
+	if err := db.sql.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&freePages); err != nil {
+		return 0, 0, fmt.Errorf("freelist_count pragma: %w", err)
+	}
+	return pageCount, freePages, nil
+}
+
+func shouldVacuum(pageCount int64, freePages int64) bool {
+	if pageCount <= 0 || freePages < minVacuumFreePages {
+		return false
+	}
+	return float64(freePages)/float64(pageCount) >= minVacuumFreeRatio
 }
