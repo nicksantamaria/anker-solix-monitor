@@ -65,7 +65,10 @@ func TestStatusEndpoint(t *testing.T) {
 		Timestamp:      time.Now().UTC(),
 		DeviceAddr:     "E8:EE:CC:7C:0A:2A",
 		BatteryPercent: 88,
+		BatteryHealth:  97,
 		SolarPowerW:    150,
+		USBA1PowerW:    10,
+		USBC1PowerW:    15,
 	}
 	store := &mockStore{latest: row}
 	srv := newTestServer(store, &mockMonitor{connected: true})
@@ -77,12 +80,21 @@ func TestStatusEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	var got database.TelemetryRow
+	var got map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.BatteryPercent != 88 {
-		t.Errorf("expected battery 88, got %d", got.BatteryPercent)
+	if got["battery_percent"] != float64(88) {
+		t.Errorf("expected battery 88, got %v", got["battery_percent"])
+	}
+	if _, ok := got["battery_health"]; ok {
+		t.Fatalf("did not expect battery_health in status payload")
+	}
+	if _, ok := got["usba1_power_w"]; ok {
+		t.Fatalf("did not expect usba1_power_w in status payload")
+	}
+	if _, ok := got["usbc1_power_w"]; ok {
+		t.Fatalf("did not expect usbc1_power_w in status payload")
 	}
 	if rec.Header().Get("Cache-Control") != "public, max-age=60" {
 		t.Errorf("expected cache control max-age=60, got %q", rec.Header().Get("Cache-Control"))
@@ -117,8 +129,8 @@ func TestStatusEndpoint(t *testing.T) {
 
 func TestHistoryEndpoint(t *testing.T) {
 	rows := []database.TelemetryRow{
-		{ID: 1, BatteryPercent: 10},
-		{ID: 2, BatteryPercent: 20},
+		{ID: 1, BatteryPercent: 10, USBA1PowerW: 7, USBC1PowerW: 9},
+		{ID: 2, BatteryPercent: 20, USBA2PowerW: 8, USBC2PowerW: 11},
 	}
 	store := &mockStore{history: rows}
 	srv := newTestServer(store, &mockMonitor{})
@@ -145,6 +157,21 @@ func TestHistoryEndpoint(t *testing.T) {
 	}
 	if _, ok := got[0]["battery_percent"]; !ok {
 		t.Fatalf("expected battery_percent in history payload")
+	}
+	if _, ok := got[0]["usba1_power_w"]; ok {
+		t.Fatalf("did not expect usba1_power_w in history payload")
+	}
+	if _, ok := got[0]["usba2_power_w"]; ok {
+		t.Fatalf("did not expect usba2_power_w in history payload")
+	}
+	if _, ok := got[0]["usbc1_power_w"]; ok {
+		t.Fatalf("did not expect usbc1_power_w in history payload")
+	}
+	if _, ok := got[0]["usbc2_power_w"]; ok {
+		t.Fatalf("did not expect usbc2_power_w in history payload")
+	}
+	if _, ok := got[0]["usbc3_power_w"]; ok {
+		t.Fatalf("did not expect usbc3_power_w in history payload")
 	}
 	if rec.Header().Get("Cache-Control") != "public, max-age=60" {
 		t.Errorf("expected cache control max-age=60, got %q", rec.Header().Get("Cache-Control"))

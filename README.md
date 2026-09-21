@@ -109,7 +109,7 @@ sudo systemctl enable --now solix-monitor
 Open `http://<pi-ip>:8080` in a browser (e.g. on your iPad).
 
 The dashboard:
-- Refreshes current status every 30 seconds automatically
+- Refreshes current status every 5 minutes automatically
 - Shows battery %, solar input, AC input/output, DC output, temperature
 - Shows estimated time remaining based on last 5-minute discharge trend
 - Displays historical charts for 1h / 6h / 24h / 7d ranges
@@ -140,6 +140,8 @@ The dashboard:
   "serial_number": "A17809XXXXXXXX"
 }
 ```
+
+`/api/status` excludes battery health and per-port USB power fields.
 
 #### `/api/health` example response
 
