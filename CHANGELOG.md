@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.5.1...v1.6.0) (2026-09-22)
+
+
+### Features
+
+* **database:** add tiered telemetry retention and compaction windows ([#37](https://github.com/nicksantamaria/anker-solix-monitor/issues/37)) ([0cf3f1b](https://github.com/nicksantamaria/anker-solix-monitor/commit/0cf3f1b993b8c51897700598722bbb7b7d7317e0))
+
 ## [1.5.1](https://github.com/nicksantamaria/anker-solix-monitor/compare/v1.5.0...v1.5.1) (2026-09-21)
 
 
